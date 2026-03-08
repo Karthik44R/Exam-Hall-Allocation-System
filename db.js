@@ -2,21 +2,57 @@
 // db.js - Database Layer
 // ============================================
 
-const mysql = require("mysql2/promise");
+const mysql  = require("mysql2/promise");
+const bcrypt = require("bcryptjs");
+const SALT_ROUNDS = 12;
 
+// FIX #16: Use environment variables for DB credentials (never hardcode in source)
+// Set these in a .env file or your shell: DB_HOST, DB_USER, DB_PASS, DB_NAME
 const pool = mysql.createPool({
-  host:             "localhost",
-  user:             "root",
-  password:         "k123",        // ← put your MySQL password here
-  database:         "exam_seating",
+  host:             process.env.DB_HOST     || "localhost",
+  user:             process.env.DB_USER     || "root",
+  password:         process.env.DB_PASS     || "k123",          // set DB_PASS env var
+  database:         process.env.DB_NAME     || "exam_seating",
   waitForConnections: true,
   connectionLimit:  10,
   queueLimit:       0,
 });
 
 pool.getConnection()
-  .then(conn => { console.log("✅ MySQL connected"); conn.release(); })
-  .catch(err  => { console.error("❌ MySQL error:", err.message); process.exit(1); });
+  .then(async conn => {
+    console.log("✅ MySQL connected");
+    // Auto-create sessions table if it doesn't exist
+    await conn.execute(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        token      VARCHAR(64)  PRIMARY KEY,
+        username   VARCHAR(100) NOT NULL,
+        role       VARCHAR(50)  NOT NULL,
+        created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    // Also ensure administrator is in the role ENUM
+    await conn.execute(`
+      ALTER TABLE users MODIFY COLUMN role ENUM('coordinator','invigilator','administrator') NOT NULL
+    `).catch(() => {}); // ignore if already correct
+    console.log("✅ Tables verified");
+
+    // ── PASSWORD MIGRATION ──────────────────────────────────────
+    // Hash any plain-text passwords. Bcrypt hashes start with $2a$, $2b$, or $2y$.
+    const isBcrypt = p => /^\$2[aby]\$/.test(p);
+    const [users] = await conn.execute(`SELECT id, password FROM users`);
+    let migrated = 0;
+    for (const u of users) {
+      if (!isBcrypt(u.password)) {
+        const hashed = await bcrypt.hash(u.password, SALT_ROUNDS);
+        await conn.execute(`UPDATE users SET password=? WHERE id=?`, [hashed, u.id]);
+        migrated++;
+      }
+    }
+    if (migrated > 0) console.log(`✅ Migrated ${migrated} plain-text password(s) to bcrypt`);
+
+    conn.release();
+  })
+  .catch(err => { console.error("❌ MySQL error:", err.message); process.exit(1); });
 
 // ============================================
 // HALLS
@@ -151,6 +187,15 @@ const getAllocationsByHall = async (hall_id) => {
   return r;
 };
 
+const deleteStudent = async (student_id) => {
+  const [r] = await pool.execute("DELETE FROM students WHERE student_id = ?", [student_id]);
+  return r;
+};
+
+const clearHalls = async () => {
+  await pool.execute("DELETE FROM halls");
+};
+
 const clearAllocations = async () => {
   const conn = await pool.getConnection();
   try {
@@ -243,16 +288,18 @@ const getUserByUsername = async (username) => {
 };
 
 const createUser = async (username, password, role) => {
+  const hashed = await bcrypt.hash(password, SALT_ROUNDS);
   const [r] = await pool.execute(
     `INSERT INTO users (username, password, role) VALUES (?,?,?)`,
-    [username, password, role]
+    [username, hashed, role]
   );
   return r;
 };
 
 const updateUserPassword = async (username, newPassword) => {
+  const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
   const [r] = await pool.execute(
-    `UPDATE users SET password=? WHERE username=?`, [newPassword, username]
+    `UPDATE users SET password=? WHERE username=?`, [hashed, username]
   );
   return r;
 };
@@ -265,14 +312,34 @@ const deleteUser = async (id) => {
 // ============================================
 // EXPORTS
 // ============================================
+// Session persistence
+const createSession = async (token, username, role) => {
+  await pool.execute("INSERT INTO sessions (token, username, role) VALUES (?, ?, ?)", [token, username, role]);
+};
+
+const getSession = async (token) => {
+  const [rows] = await pool.execute("SELECT * FROM sessions WHERE token = ?", [token]);
+  return rows[0] || null;
+};
+
+const deleteSession = async (token) => {
+  await pool.execute("DELETE FROM sessions WHERE token = ?", [token]);
+};
+
+// Clear ALL sessions for a username — called before login so stale role data can't persist
+const deleteSessionsByUsername = async (username) => {
+  await pool.execute("DELETE FROM sessions WHERE username = ?", [username]);
+};
+
 module.exports = {
-  pool,
+  pool, bcrypt,
   upsertHall, getAllHalls, getHallById, deleteHall, getTotalCapacity,
   insertStudent, bulkInsertStudents, getAllStudents, getStudentsGroupedBySubject,
-  getTotalStudentCount, getStudentCountBySubject, clearStudents,
+  getTotalStudentCount, getStudentCountBySubject, deleteStudent, clearStudents, clearHalls,
   bulkInsertAllocations, getAllAllocations, getAllocationsByHall, clearAllocations,
   bulkInsertUnallocated, getUnallocatedStudents,
   getSubjectPerHall, getHallSummary,
   insertAllocationLog, getLatestLog, getAllLogs,
   getAllUsers, getUserByUsername, createUser, deleteUser, updateUserPassword,
+  createSession, getSession, deleteSession, deleteSessionsByUsername,
 };

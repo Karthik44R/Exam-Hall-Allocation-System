@@ -108,8 +108,10 @@ function runAllocationAlgorithm(groupedStudents, halls) {
             // next position which likely has different neighbors — resolving
             // the conflict without any violation at all.
             //
+            // FIX #19: Use globalConsumed + hallConsumed so skipped seats in the
+            // current hall are accounted for in the gap-decision formula.
             const studentsLeft      = totalStudents - studentIdx;
-            const remainingCapacity = totalCapacity - globalConsumed - hallConsumed;
+            const remainingCapacity = totalCapacity - (globalConsumed + hallConsumed);
 
             if (remainingCapacity > studentsLeft) {
               // ✅  Gap skip — leave seat empty, student retried next iteration

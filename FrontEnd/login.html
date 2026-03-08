@@ -38,11 +38,11 @@
   }
 
   html, body {
-    height: 100%;
+    min-height: 100%;
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    overflow: hidden;
+    overflow-y: auto;
   }
 
   /* ── GRID BACKGROUND ── */
@@ -505,7 +505,7 @@
   <!-- Role selector -->
   <div class="role-label">Select Role</div>
   <div class="role-cards">
-    <div class="role-card active" data-role="examination_branch" onclick="selectRole(this)">
+    <div class="role-card active" data-role="administrator" onclick="selectRole(this)">
       <span class="role-icon">🔑</span>
       <div class="role-name">Administrator</div>
       <div class="role-desc">Full system access</div>
@@ -563,22 +563,22 @@
 
 <script>
   const REDIRECTS = {
-    examination_branch: 'admin_dashboard.html',
+    administrator: 'admin_dashboard.html',
     coordinator:        'coordinator_dashboard.html',
     invigilator:        'invig_dashboard.html',
   };
 
   const LABELS = {
-    examination_branch: 'Administrator',
+    administrator: 'Administrator',
     coordinator:        'Coordinator',
     invigilator:        'Invigilator',
   };
 
-  let currentRole = 'examination_branch';
+  let currentRole = 'administrator';
   document.addEventListener('DOMContentLoaded', () => updateRegisterBtn(currentRole));
 
   const ROLE_COLORS = {
-    examination_branch: { accent: '#e8341c', glow: 'rgba(232,52,28,0.35)',  soft: 'rgba(232,52,28,0.12)'  },
+    administrator: { accent: '#e8341c', glow: 'rgba(232,52,28,0.35)',  soft: 'rgba(232,52,28,0.12)'  },
     coordinator:        { accent: '#3b82f6', glow: 'rgba(59,130,246,0.35)', soft: 'rgba(59,130,246,0.12)' },
     invigilator:        { accent: '#10b981', glow: 'rgba(16,185,129,0.35)', soft: 'rgba(16,185,129,0.12)' },
   };
@@ -597,7 +597,7 @@
     currentRole = card.dataset.role;
     applyRoleColor(currentRole);
     document.getElementById('signinBtn').textContent = `Sign in as ${LABELS[currentRole]}`;
-    document.getElementById('username').placeholder = currentRole === 'examination_branch' ? 'admin' : currentRole;
+    document.getElementById('username').placeholder = currentRole === 'administrator' ? 'admin' : currentRole;
     document.getElementById('errorMsg').classList.remove('show');
     updateRegisterBtn(currentRole);
   }
@@ -614,6 +614,8 @@
     }
   }
 
+  // FIX #3: Admin login now verified server-side via admin.config.json (not hardcoded).
+  // FIX token: server returns an auth token stored in sessionStorage for all API calls.
   async function handleLogin() {
     const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
@@ -631,19 +633,6 @@
     btn.innerHTML = `<span class="spinner"></span>Authenticating...`;
 
     try {
-      // Admin: hardcoded check only
-      if (currentRole === 'examination_branch') {
-        if (username === 'admin' && password === 'admin123') {
-          sessionStorage.setItem('ehas_role', currentRole);
-          sessionStorage.setItem('ehas_user', username);
-          window.location.href = REDIRECTS[currentRole];
-        } else {
-          showError();
-        }
-        return;
-      }
-
-      // Coordinator / Invigilator: check against database via API
       const res  = await fetch('http://localhost:3000/api/login', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -652,13 +641,14 @@
       const json = await res.json();
 
       if (json.success) {
-        sessionStorage.setItem('ehas_role', currentRole);
-        sessionStorage.setItem('ehas_user', username);
+        sessionStorage.setItem('ehas_role',       json.role);
+        sessionStorage.setItem('ehas_user',       json.username);
+        sessionStorage.setItem('ehas_token',      json.token);
+        sessionStorage.setItem('ehas_login_time', Date.now().toString());
         window.location.href = REDIRECTS[currentRole];
       } else {
         showError(json.message);
       }
-
     } catch (e) {
       showError('Cannot reach server. Is it running?');
     }
@@ -689,9 +679,9 @@
     setTimeout(resetRegModal, 300);
   }
   function resetRegModal() {
-    document.getElementById('regUser').value    = '';
-    document.getElementById('regPw').value      = '';
-    document.getElementById('regConfirm').value = '';
+    document.getElementById('regUser').value      = '';
+    document.getElementById('regPw').value        = '';
+    document.getElementById('regConfirm').value   = '';
     document.getElementById('regErr').classList.remove('show');
     document.getElementById('regFormWrap').style.display   = '';
     document.getElementById('regSuccessWrap').style.display = 'none';
@@ -727,10 +717,11 @@
     btn.innerHTML = '<span class="spinner"></span>Creating...';
 
     try {
+      // Register new admin account — open endpoint, no auth token needed
       const res  = await fetch('http://localhost:3000/api/users', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ username, password, role: 'examination_branch' }),
+        body:    JSON.stringify({ username, password, role: 'administrator' }),
       });
       const json = await res.json();
       if (json.success) {
@@ -751,7 +742,7 @@
 
   // Show/hide register button based on role
   function updateRegisterBtn(role) {
-    const isAdmin = role === 'examination_branch';
+    const isAdmin = role === 'administrator';
     document.getElementById('registerBtn').classList.toggle('visible', isAdmin);
     document.querySelector('.forgot-row').classList.toggle('visible', isAdmin);
   }
@@ -796,12 +787,13 @@
     btn.innerHTML = '<span class="spinner"></span>Resetting...';
 
     try {
-      // Admin is hardcoded — use dedicated admin-reset endpoint
+      // Use reset-admin-password for 'admin', reset-password for registered users
+      // Both endpoints are open (no auth required) since user is not logged in here
       const endpoint = username.toLowerCase() === 'admin'
         ? 'http://localhost:3000/api/reset-admin-password'
         : 'http://localhost:3000/api/reset-password';
 
-      const res  = await fetch(endpoint, {
+      const res = await fetch(endpoint, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username, newPassword: password }),

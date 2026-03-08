@@ -130,6 +130,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .btn-teal:hover{filter:brightness(1.1);transform:translateY(-1px);}
 .btn-warn{background:var(--warn-soft);color:var(--warn);border:1px solid rgba(245,158,11,0.3);}
 .btn-warn:hover{background:rgba(245,158,11,0.18);}
+.btn-teal-soft{background:var(--teal-soft);color:var(--teal);border:1px solid rgba(20,184,166,0.3);}
+.btn-teal-soft:hover{background:rgba(20,184,166,0.18);}
+.btn-blue-soft{background:var(--blue-soft);color:var(--blue);border:1px solid rgba(99,102,241,0.3);}
+.btn-blue-soft:hover{background:rgba(99,102,241,0.18);}
 .btn:disabled{opacity:0.4;cursor:not-allowed;transform:none!important;filter:none!important;}
 .btn-sm{padding:6px 12px;font-size:12px;}
 
@@ -284,12 +288,63 @@ tr:hover td{background:rgba(255,255,255,0.015);}
 .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* ── SKELETON SCREENS ── */
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position:  600px 0; }
+}
+.skel {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--border2) 50%, var(--surface) 75%);
+  background-size: 600px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 6px;
+  display: inline-block;
+}
+.skel-stat-val  { width: 60px;  height: 36px; margin: 4px 0; }
+.skel-stat-sub  { width: 90px;  height: 10px; margin-top: 6px; }
+.skel-row       { width: 100%;  height: 18px; margin: 10px 0; }
+.skel-row.short { width: 60%; }
+.skel-row.med   { width: 80%; }
+.skel-bar       { width: 100%;  height: 10px; margin: 14px 0; border-radius: 4px; }
+.skel-td        { width: 80%;   height: 14px; }
+.skel-badge     { width: 50px;  height: 20px; border-radius: 10px; }
+
 /* ── RESPONSIVE ── */
 @media(max-width:768px){
   .sidebar{position:fixed;left:-220px;height:100%;transition:left 0.3s;z-index:100;}
   .sidebar.open{left:0;}
   .main{width:100%;}
 }
+/* ── CONFIRM MODAL ── */
+.confirm-overlay{
+  position:fixed;inset:0;z-index:1000;
+  background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);
+  display:flex;align-items:center;justify-content:center;padding:1rem;
+  opacity:0;pointer-events:none;transition:opacity 0.2s;
+}
+.confirm-overlay.open{opacity:1;pointer-events:all;}
+.confirm-modal{
+  width:100%;max-width:400px;
+  background:#141726;border:1px solid #252a42;border-radius:16px;
+  padding:28px 28px 24px;
+  transform:translateY(20px) scale(0.97);
+  transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  box-shadow:0 24px 80px rgba(0,0,0,0.6);
+}
+.confirm-overlay.open .confirm-modal{transform:translateY(0) scale(1);}
+.confirm-icon{font-size:36px;display:block;text-align:center;margin-bottom:14px;}
+.confirm-title{font-size:17px;font-weight:700;color:var(--text);text-align:center;margin-bottom:8px;}
+.confirm-desc{font-size:13px;color:var(--muted);text-align:center;line-height:1.6;margin-bottom:18px;}
+.confirm-input{
+  width:100%;background:var(--surface);border:1.5px solid var(--border2);
+  border-radius:8px;padding:9px 14px;color:var(--text);font-size:13px;
+  outline:none;transition:border-color 0.2s;margin-bottom:16px;
+  font-family:var(--mono);
+}
+.confirm-input:focus{border-color:var(--red);}
+.confirm-input.valid{border-color:#4ade80;}
+.confirm-btns{display:flex;gap:10px;}
+.confirm-btns .btn{flex:1;justify-content:center;}
 </style>
 </head>
 <body>
@@ -500,9 +555,11 @@ tr:hover td{background:rgba(255,255,255,0.015);}
           <button class="btn btn-ghost btn-sm" onclick="loadHalls()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.08-8.4"/></svg> Refresh
           </button>
+          <button class="btn btn-warn btn-sm" onclick="confirmClearHalls()">🗑 Clear All</button>
         </div>
       </div>
 
+      <!-- Add single hall -->
       <div class="card">
         <div class="card-header"><div class="card-title">Add / Update Hall</div></div>
         <div class="card-body">
@@ -520,26 +577,36 @@ tr:hover td{background:rgba(255,255,255,0.015);}
         </div>
       </div>
 
+      <!-- CSV Upload -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">Bulk CSV Upload</div>
           <a href="#" onclick="downloadSampleCSV('halls')" class="btn btn-ghost btn-sm">⬇ Sample CSV</a>
         </div>
         <div class="card-body">
+          <div class="alert alert-warn" id="hall-warn"></div>
           <div class="upload-zone" id="hallUploadZone">
             <input type="file" accept=".csv" id="hallCsvFile" onchange="uploadHallCSV()"/>
             <div class="upload-icon">📤</div>
             <div class="upload-text"><strong>Click or drag CSV here</strong><br>Columns: hall_id, hall_name, capacity, total_rows, total_cols</div>
           </div>
+          <div class="progress-bar" style="margin-top:12px"><div class="progress-fill" id="hallProgress" style="width:0%"></div></div>
         </div>
       </div>
 
+      <!-- Hall list -->
       <div class="card">
-        <div class="card-header"><div class="card-title">Hall List</div><span class="badge badge-muted" id="hallCount">0 halls</span></div>
+        <div class="card-header">
+          <div class="card-title">Hall List</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="hallSearch" placeholder="Search…" style="background:var(--surface);border:1px solid var(--border2);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px;outline:none;width:160px;" oninput="filterHalls()"/>
+            <span class="badge badge-muted" id="hallCount">0 halls</span>
+          </div>
+        </div>
         <div class="card-body" style="padding:0">
           <div class="tbl-wrap"><table>
             <thead><tr><th>Hall ID</th><th>Name</th><th>Capacity</th><th>Rows</th><th>Cols</th><th>Filled</th><th>Remaining</th><th>Action</th></tr></thead>
-            <tbody id="hallBody"><tr><td colspan="8"><div class="empty-state" style="padding:24px"><div class="empty-icon">🏛</div><div class="empty-text">No halls yet.</div></div></td></tr></tbody>
+            <tbody id="hallBody"><tr><td colspan="8"><div class="empty-state" style="padding:24px"><div class="empty-icon">🏛</div><div class="empty-text">No halls yet. Add above or upload CSV.</div></div></td></tr></tbody>
           </table></div>
         </div>
       </div>
@@ -585,8 +652,8 @@ tr:hover td{background:rgba(255,255,255,0.015);}
           </div>
           <div style="display:flex;gap:10px;margin-top:8px;">
             <button class="btn btn-teal" onclick="showSection('results')">🗺 View Seating Chart</button>
-            <button class="btn btn-ghost" onclick="window.open('http://localhost:3000/api/export/csv')">⬇ Download CSV</button>
-            <button class="btn btn-ghost" onclick="window.open('http://localhost:3000/api/export/pdf')">⬇ Download PDF</button>
+            <button class="btn btn-ghost" onclick="exportFile('csv')">⬇ Download CSV</button>
+            <button class="btn btn-ghost" onclick="exportFile('pdf')">⬇ Download PDF</button>
           </div>
         </div>
       </div>
@@ -602,8 +669,8 @@ tr:hover td{background:rgba(255,255,255,0.015);}
           <h2>Results</h2>
         </div>
         <div class="page-header-right">
-          <button class="btn btn-ghost btn-sm" onclick="window.open('http://localhost:3000/api/export/csv')">⬇ CSV</button>
-          <button class="btn btn-red btn-sm" onclick="window.open('http://localhost:3000/api/export/pdf')">⬇ PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportFile('csv')">⬇ CSV</button>
+          <button class="btn btn-red btn-sm" onclick="exportFile('pdf')">⬇ PDF</button>
         </div>
       </div>
 
@@ -704,10 +771,11 @@ tr:hover td{background:rgba(255,255,255,0.015);}
       </div>
 
       <!-- Stats -->
-      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:24px">
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
         <div class="stat-card red"><div class="stat-label">Total Users</div><div class="stat-value" id="u-total">—</div></div>
         <div class="stat-card teal"><div class="stat-label">Coordinators</div><div class="stat-value" id="u-coord">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Invigilators</div><div class="stat-value" id="u-invig">—</div></div>
+        <div class="stat-card warn"><div class="stat-label">Administrators</div><div class="stat-value" id="u-admin">—</div></div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:20px;align-items:start">
@@ -717,7 +785,7 @@ tr:hover td{background:rgba(255,255,255,0.015);}
           <div class="card-header"><div class="card-title">Create New User</div></div>
           <div class="card-body">
 
-            <!-- Role tabs -->
+            <!-- Role tabs (Coordinator & Invigilator only — Admins cannot be created here) -->
             <div style="display:flex;gap:8px;margin-bottom:20px">
               <div id="utab-coord" onclick="setUserRole('coordinator')"
                 style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid var(--teal);background:var(--teal-soft);cursor:pointer;text-align:center;transition:all 0.18s">
@@ -786,9 +854,10 @@ tr:hover td{background:rgba(255,255,255,0.015);}
               <input type="text" id="u-search" placeholder="Search users…" oninput="renderUsersTable()"
                 style="flex:1;min-width:140px;background:var(--surface);border:1.5px solid var(--border2);border-radius:7px;padding:8px 14px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none"/>
               <div style="display:flex;gap:4px">
-                <button id="uft-all"   onclick="setUserFilter('all')"         style="padding:6px 12px;border-radius:6px;border:1px solid var(--red);background:var(--red-soft);cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--red)">All</button>
-                <button id="uft-coord" onclick="setUserFilter('coordinator')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:none;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--muted2)">Coord</button>
-                <button id="uft-invig" onclick="setUserFilter('invigilator')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:none;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--muted2)">Invig</button>
+                <button id="uft-all"   onclick="setUserFilter('all')"           style="padding:6px 12px;border-radius:6px;border:1px solid var(--red);background:var(--red-soft);cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--red)">All</button>
+                <button id="uft-coord" onclick="setUserFilter('coordinator')"   style="padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:none;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--muted2)">Coord</button>
+                <button id="uft-invig" onclick="setUserFilter('invigilator')"   style="padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:none;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--muted2)">Invig</button>
+                <button id="uft-admin" onclick="setUserFilter('administrator')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:none;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--muted2)">Admin</button>
               </div>
             </div>
             <div class="tbl-wrap" style="max-height:440px;overflow-y:auto">
@@ -809,12 +878,19 @@ tr:hover td{background:rgba(255,255,255,0.015);}
 </div><!-- /app -->
 
 <script>
-const API = 'http://localhost:3000/api';
+const API = '/api';
 
 // ── AUTH CHECK ──
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+function isSessionExpired() {
+  const t = parseInt(sessionStorage.getItem('ehas_login_time') || '0');
+  return !t || (Date.now() - t) > SESSION_TTL;
+}
 const role = sessionStorage.getItem('ehas_role');
 const user = sessionStorage.getItem('ehas_user');
-if (!role || !user) { window.location.href = 'login.html'; }
+const token = sessionStorage.getItem('ehas_token') || '';
+// FIX #11: Check role explicitly — coordinators/invigilators must NOT access admin
+if (!role || !user || !token || role !== 'administrator' || isSessionExpired()) { sessionStorage.clear(); window.location.href = 'login.html'; }
 
 // Set user info
 document.getElementById('userName').textContent = user || 'Admin';
@@ -827,8 +903,20 @@ function logout() {
   sessionStorage.clear();
   window.location.href = 'login.html';
 }
+// ── AUTO LOGOUT ON INACTIVITY (10 min) ──
+const INACTIVITY_LIMIT = 10 * 60 * 1000;
+let lastActivity = Date.now();
+function resetActivity() { lastActivity = Date.now(); }
+['mousemove','mousedown','keydown','touchstart','scroll','click'].forEach(evt =>
+  document.addEventListener(evt, resetActivity, { passive: true })
+);
+setInterval(() => {
+  if (Date.now() - lastActivity > INACTIVITY_LIMIT) {
+    sessionStorage.clear();
+    window.location.href = 'login.html';
+  }
+}, 30 * 1000); // check every 30 seconds
 
-// ── NAVIGATION ──
 let currentSection = 'dashboard';
 function showSection(name) {
   document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
@@ -847,8 +935,8 @@ function showSection(name) {
   currentSection = name;
   // Lazy load
   if (name === 'dashboard') loadDashboard();
-  if (name === 'students')  loadStudents();
-  if (name === 'halls')     loadHalls();
+  if (name === 'students')  { skelTableRows('stuBody', 4); loadStudents(); }
+  if (name === 'halls')     { skelTableRows('hallBody', 8); loadHalls(); }
   if (name === 'allocate')  loadAllocateMeta();
   if (name === 'results')   loadResults();
   if (name === 'violations') loadViolations();
@@ -867,9 +955,11 @@ function toast(msg, type='success') {
 
 // ── API HELPER ──
 async function api(path, method='GET', body=null) {
-  const opts = { method, headers:{'Content-Type':'application/json'} };
+  const tk = sessionStorage.getItem('ehas_token') || '';
+  const opts = { method, headers:{'Content-Type':'application/json', 'Authorization':'Bearer ' + tk} };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
+  if (res.status === 401) { sessionStorage.clear(); window.location.href = 'login.html'; return {}; }
   return res.json();
 }
 
@@ -878,18 +968,26 @@ async function api(path, method='GET', body=null) {
 // ══════════════════════════════════════
 async function loadDashboard() {
   try {
-    const [stuData, hallData, allocData, logData, subData] = await Promise.all([
+    const [stuRes, hallRes, allocRes, logRes, subRes] = await Promise.allSettled([
       api('/students'), api('/halls'), api('/allocations/summary'),
       api('/logs'), api('/allocations/subject-distribution')
     ]);
+
+    // Safely unwrap each result — use empty fallback if that call failed
+    const stuData   = stuRes.status   === 'fulfilled' ? stuRes.value   : {};
+    const hallData  = hallRes.status  === 'fulfilled' ? hallRes.value  : {};
+    const allocData = allocRes.status === 'fulfilled' ? allocRes.value : {};
+    const logData   = logRes.status   === 'fulfilled' ? logRes.value   : {};
+    const subData   = subRes.status   === 'fulfilled' ? subRes.value   : {};
+
     const students = stuData.total || 0;
     const allocated = (allocData.data||[]).reduce((s,h)=>s+h.seats_filled,0);
     const capacity  = (allocData.data||[]).reduce((s,h)=>s+h.capacity,0);
     const lastLog   = (logData.data||[])[0];
     document.getElementById('ds-students').textContent   = students;
     document.getElementById('ds-allocated').textContent  = allocated;
-    document.getElementById('ds-unallocated').textContent= lastLog ? lastLog.total_unallocated : '—';
-    document.getElementById('ds-violations').textContent = lastLog ? lastLog.constraint_violations : '—';
+    document.getElementById('ds-unallocated').textContent= lastLog ? lastLog.total_unallocated : '0';
+    document.getElementById('ds-violations').textContent = lastLog ? lastLog.constraint_violations : '0';
     document.getElementById('ds-halls').textContent      = (hallData.data||[]).length;
     document.getElementById('ds-capacity').textContent   = capacity;
     // Update nav badges
@@ -911,6 +1009,8 @@ async function loadDashboard() {
           </div>
           <span style="font-family:var(--mono);font-size:10px;color:var(--muted);width:64px;text-align:right">${h.seats_filled}/${h.capacity}</span>
         </div>`).join('');
+    } else {
+      hulDiv.innerHTML = '<div class="empty-state"><div class="empty-icon">🏛</div><div class="empty-text">No halls configured yet</div></div>';
     }
     // Subject dist
     const sdDiv = document.getElementById('subjectDistList');
@@ -925,6 +1025,8 @@ async function loadDashboard() {
           <span style="font-family:var(--mono);font-size:11px;color:var(--text);flex:1">${code}</span>
           <span class="badge badge-muted">${count}</span>
         </div>`).join('');
+    } else {
+      sdDiv.innerHTML = '<div class="empty-state"><div class="empty-icon">📚</div><div class="empty-text">No allocation run yet</div></div>';
     }
     // Logs table
     const logsBody = document.getElementById('logsBody');
@@ -940,7 +1042,23 @@ async function loadDashboard() {
           <td><span class="badge ${l.status==='SUCCESS'?'badge-teal':l.status==='PARTIAL'?'badge-warn':'badge-red'}">${l.status}</span></td>
         </tr>`).join('');
     }
-  } catch(e) { toast('Failed to load dashboard data', 'error'); }
+  } catch(e) { toast('Some dashboard data could not be loaded', 'warn'); }
+  finally {
+    // Always clear any remaining skeletons so they never stay stuck
+    const hulDiv = document.getElementById('hallUtilList');
+    const sdDiv  = document.getElementById('subjectDistList');
+    const logsBody = document.getElementById('logsBody');
+    if (hulDiv && hulDiv.querySelector('.skel'))
+      hulDiv.innerHTML = '<div class="empty-state"><div class="empty-icon">🏛</div><div class="empty-text">No halls configured yet</div></div>';
+    if (sdDiv && sdDiv.querySelector('.skel'))
+      sdDiv.innerHTML  = '<div class="empty-state"><div class="empty-icon">📚</div><div class="empty-text">No allocation run yet</div></div>';
+    if (logsBody && logsBody.querySelector('.skel'))
+      logsBody.innerHTML = '<tr><td colspan="7"><div class="empty-state" style="padding:20px"><div class="empty-text">No allocation runs yet</div></div></td></tr>';
+    ['ds-students','ds-allocated','ds-unallocated','ds-violations','ds-halls','ds-capacity'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.querySelector('.skel')) el.textContent = '0';
+    });
+  }
 }
 
 // ══════════════════════════════════════
@@ -1003,9 +1121,10 @@ async function uploadStudentCSV() {
   try {
     const csvText = await file.text();
     fileInput.value = '';
+    const tkc = sessionStorage.getItem('ehas_token') || '';
     const res  = await fetch(API + '/students/csv', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tkc },
       body:    JSON.stringify({ csvData: csvText })
     });
     const data = await res.json();
@@ -1027,45 +1146,81 @@ async function uploadStudentCSV() {
 }
 
 async function confirmClearStudents() {
-  if (!confirm('Clear ALL students and allocations? This cannot be undone.')) return;
-  try {
-    const res = await api('/students', 'DELETE');
-    if (res.success) { toast('All students cleared', 'warn'); loadStudents(); }
-    else toast(res.message, 'error');
-  } catch(e) { toast('Error', 'error'); }
+  showConfirmModal({
+    icon:        '👥',
+    title:       'Clear All Students?',
+    desc:        'This will permanently delete <strong>all students and their seat allocations</strong>. Type <strong>DELETE</strong> below to confirm.',
+    keyword:     'DELETE',
+    btnLabel:    '🗑 Clear All Students',
+    onConfirm:   async () => {
+      const res = await api('/students', 'DELETE');
+      if (res.success) { toast('All students cleared', 'warn'); loadStudents(); }
+      else toast(res.message, 'error');
+    }
+  });
 }
 
 // ══════════════════════════════════════
 // HALLS
 // ══════════════════════════════════════
 let allHalls = [];
+let hallSummMap = {};
+
 async function loadHalls() {
   try {
     const [hallData, summData] = await Promise.all([api('/halls'), api('/allocations/summary')]);
     allHalls = hallData.data || [];
-    const summMap = {};
-    (summData.data||[]).forEach(h => summMap[h.hall_id] = h);
+    hallSummMap = {};
+    (summData.data||[]).forEach(h => hallSummMap[h.hall_id] = h);
     document.getElementById('hallCount').textContent = allHalls.length + ' halls';
-    document.getElementById('nb-halls').textContent = allHalls.length;
-    const tbody = document.getElementById('hallBody');
-    if (!allHalls.length) {
-      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state" style="padding:24px"><div class="empty-icon">🏛</div><div class="empty-text">No halls yet.</div></div></td></tr>`;
-      return;
-    }
-    tbody.innerHTML = allHalls.map(h => {
-      const s = summMap[h.hall_id] || {};
-      return `<tr>
-        <td class="td-mono">${h.hall_id}</td>
-        <td>${h.hall_name}</td>
-        <td>${h.capacity}</td>
-        <td>${h.total_rows}</td>
-        <td>${h.total_cols}</td>
-        <td><span style="color:var(--teal)">${s.seats_filled||0}</span></td>
-        <td><span style="color:var(--muted)">${s.seats_remaining!==undefined?s.seats_remaining:h.capacity}</span></td>
-        <td><button class="btn btn-warn btn-sm" onclick="deleteHall('${h.hall_id}')">🗑 Delete</button></td>
-      </tr>`;
-    }).join('');
+    document.getElementById('nb-halls').textContent  = allHalls.length;
+    renderHalls(allHalls);
   } catch(e) { toast('Failed to load halls', 'error'); }
+}
+
+function renderHalls(list) {
+  const tbody = document.getElementById('hallBody');
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state" style="padding:24px"><div class="empty-icon">🏛</div><div class="empty-text">No halls yet. Add above or upload CSV.</div></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(h => {
+    const s = hallSummMap[h.hall_id] || {};
+    return `<tr>
+      <td class="td-mono">${h.hall_id}</td>
+      <td>${h.hall_name}</td>
+      <td>${h.capacity}</td>
+      <td>${h.total_rows}</td>
+      <td>${h.total_cols}</td>
+      <td><span style="color:var(--teal)">${s.seats_filled||0}</span></td>
+      <td><span style="color:var(--muted)">${s.seats_remaining!==undefined?s.seats_remaining:h.capacity}</span></td>
+      <td><button class="btn btn-warn btn-sm" onclick="deleteHall('${h.hall_id}')">🗑 Delete</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function filterHalls() {
+  const q = document.getElementById('hallSearch').value.toLowerCase();
+  renderHalls(allHalls.filter(h =>
+    h.hall_id.toLowerCase().includes(q) ||
+    h.hall_name.toLowerCase().includes(q) ||
+    String(h.capacity).includes(q)
+  ));
+}
+
+async function confirmClearHalls() {
+  showConfirmModal({
+    icon:        '🏛',
+    title:       'Clear All Halls?',
+    desc:        'This will permanently delete <strong>all halls and their seat allocations</strong>. Type <strong>DELETE</strong> below to confirm.',
+    keyword:     'DELETE',
+    btnLabel:    '🗑 Clear All Halls',
+    onConfirm:   async () => {
+      const res = await api('/halls', 'DELETE');
+      if (res.success) { toast('All halls cleared', 'warn'); loadHalls(); }
+      else toast(res.message, 'error');
+    }
+  });
 }
 
 async function saveHall() {
@@ -1096,20 +1251,39 @@ async function uploadHallCSV() {
   const fileInput = document.getElementById('hallCsvFile');
   const file = fileInput.files[0];
   if (!file) return;
+  // FIX #8 & #9: Added progress bar feedback and error display for hall CSV
+  const prog   = document.getElementById('hallProgress');
+  const warnEl = document.getElementById('hall-warn');
+  prog.style.width = '30%';
+  warnEl.classList.remove('show');
   try {
     const csvText = await file.text();
     fileInput.value = '';
+    const tk = sessionStorage.getItem('ehas_token') || '';
     const res  = await fetch(API + '/halls/csv', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tk },
       body:    JSON.stringify({ csvData: csvText })
     });
     const data = await res.json();
-    if (data.success) { toast(data.message); loadHalls(); }
-    else toast(data.message, 'error');
+    prog.style.width = '100%';
+    setTimeout(() => prog.style.width = '0%', 800);
+    if (data.success) {
+      toast(data.message);
+      if (data.errors && data.errors.length) {
+        warnEl.textContent = '⚠️ ' + data.errors.length + ' row(s) skipped: ' + data.errors.join(' | ');
+        warnEl.classList.add('show');
+      }
+      loadHalls();
+    } else {
+      toast(data.message, 'error');
+      warnEl.textContent = '❌ ' + data.message;
+      warnEl.classList.add('show');
+    }
   } catch(e) {
     console.error('Hall CSV upload error:', e);
     toast('Upload failed: ' + e.message, 'error');
+    prog.style.width = '0%';
   }
 }
 
@@ -1233,7 +1407,8 @@ async function selectHallGrid(hallId, btn) {
       row.forEach(seat => {
         if (seat.occupied) {
           const bg = getSubjectColor(seat.subject_code);
-          html += `<div class="seat-cell" style="width:${cellW}px;height:${cellH}px;background:${bg}20;border:1px solid ${bg}60;title='${seat.student_id}">
+          // FIX #18: title= was inside style= string so tooltip never showed. Now correct HTML attribute.
+          html += `<div class="seat-cell" title="${seat.student_id} — ${seat.student_name} (${seat.subject_code})" style="width:${cellW}px;height:${cellH}px;background:${bg}20;border:1px solid ${bg}60">
             <span style="color:${bg};font-weight:700;font-size:${cellW<50?7:9}px">${seat.subject_code}</span>
             <span class="s-sub" style="color:rgba(255,255,255,0.6);font-size:7px">${seat.student_id.slice(-4)}</span>
           </div>`;
@@ -1359,23 +1534,39 @@ function updateUserStats() {
   document.getElementById('u-total').textContent = allUsers.length;
   document.getElementById('u-coord').textContent = allUsers.filter(u => u.role === 'coordinator').length;
   document.getElementById('u-invig').textContent = allUsers.filter(u => u.role === 'invigilator').length;
+  document.getElementById('u-admin').textContent = allUsers.filter(u => u.role === 'administrator').length;
 }
 
 function setUserRole(role) {
   userFormRole = role;
   const tc = document.getElementById('utab-coord');
   const ti = document.getElementById('utab-invig');
+  const ta = document.getElementById('utab-admin');
   const tl = document.getElementById('utab-invig-label');
+  const tal = document.getElementById('utab-admin-label');
+
+  // Reset all to inactive
+  [tc, ti, ta].forEach(el => {
+    if (el) { el.style.border = '1.5px solid var(--border2)'; el.style.background = 'var(--card2)'; }
+  });
+  if (tl)  tl.style.color  = 'var(--muted2)';
+  if (tal) tal.style.color = 'var(--muted2)';
+
   if (role === 'coordinator') {
-    tc.style.border = '1.5px solid var(--teal)'; tc.style.background = 'var(--teal-soft)';
-    ti.style.border = '1.5px solid var(--border2)'; ti.style.background = 'var(--card2)';
-    tl.style.color = 'var(--muted2)';
-  } else {
-    ti.style.border = '1.5px solid var(--blue)'; ti.style.background = 'var(--blue-soft)';
-    tc.style.border = '1.5px solid var(--border2)'; tc.style.background = 'var(--card2)';
-    tl.style.color = 'var(--blue)';
+    tc.style.border     = '1.5px solid var(--teal)';
+    tc.style.background = 'var(--teal-soft)';
+  } else if (role === 'invigilator') {
+    ti.style.border     = '1.5px solid var(--blue)';
+    ti.style.background = 'var(--blue-soft)';
+    tl.style.color      = 'var(--blue)';
+  } else if (role === 'administrator') {
+    ta.style.border     = '1.5px solid var(--warn)';
+    ta.style.background = 'rgba(245,158,11,0.08)';
+    tal.style.color     = 'var(--warn)';
   }
-  document.getElementById('u-btn-label').textContent = role === 'coordinator' ? 'Create Coordinator' : 'Create Invigilator';
+
+  const labels = { coordinator: 'Create Coordinator', invigilator: 'Create Invigilator', administrator: 'Create Administrator' };
+  document.getElementById('u-btn-label').textContent = labels[role];
 }
 
 function uTogglePw(inputId, iconId) {
@@ -1449,12 +1640,14 @@ async function deleteUserAccount(id, name) {
 function setUserFilter(role) {
   userFilterRole = role;
   const styles = {
-    all:   { id:'uft-all',   border:'var(--red)',   bg:'var(--red-soft)',   color:'var(--red)' },
-    coordinator: { id:'uft-coord', border:'var(--teal)',  bg:'var(--teal-soft)',  color:'var(--teal)' },
-    invigilator: { id:'uft-invig', border:'var(--blue)',  bg:'var(--blue-soft)',  color:'var(--blue)' },
+    all:           { id:'uft-all',   border:'var(--red)',  bg:'var(--red-soft)',       color:'var(--red)' },
+    coordinator:   { id:'uft-coord', border:'var(--teal)', bg:'var(--teal-soft)',      color:'var(--teal)' },
+    invigilator:   { id:'uft-invig', border:'var(--blue)', bg:'var(--blue-soft)',      color:'var(--blue)' },
+    administrator: { id:'uft-admin', border:'var(--warn)', bg:'rgba(245,158,11,0.08)', color:'var(--warn)' },
   };
-  ['all','coordinator','invigilator'].forEach(r => {
+  ['all','coordinator','invigilator','administrator'].forEach(r => {
     const el = document.getElementById(styles[r].id);
+    if (!el) return;
     if (r === role) {
       el.style.border = `1px solid ${styles[r].border}`;
       el.style.background = styles[r].bg;
@@ -1488,20 +1681,130 @@ function renderUsersTable() {
   empty.style.display = 'none';
   tbody.innerHTML = filtered.map(u => {
     const isCoord = u.role === 'coordinator';
+    const isAdmin = u.role === 'administrator';
+    const badgeClass = isCoord ? 'badge-teal' : isAdmin ? 'badge-warn' : 'badge-blue';
+    const badgeLabel = isCoord ? '📋 Coordinator' : isAdmin ? '🛡️ Administrator' : '👁 Invigilator';
     const date = u.created_at ? new Date(u.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—';
     return `<tr>
       <td class="td-mono">${esc(u.username)}</td>
-      <td><span class="badge ${isCoord?'badge-teal':'badge-blue'}">${isCoord?'📋 Coordinator':'👁 Invigilator'}</span></td>
+      <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
       <td class="td-mono" style="color:var(--muted);font-size:11px">${date}</td>
-      <td><button class="btn btn-warn btn-sm" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button></td>
+      <td><button class="btn btn-sm ${isCoord?'btn-teal-soft':isAdmin?'btn-warn':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button></td>
     </tr>`;
   }).join('');
 }
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// ── EXPORT (with auth token) ──
+function exportFile(type) {
+  const tk = sessionStorage.getItem('ehas_token') || '';
+  fetch(API + '/export/' + type, { headers: { 'Authorization': 'Bearer ' + tk } })
+    .then(res => res.blob())
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Seating_Chart_' + Date.now() + '.' + type;
+      a.click();
+      URL.revokeObjectURL(url);
+    })
+    .catch(() => toast('Export failed', 'error'));
+}
+
+// ── CONFIRM MODAL ENGINE ──
+let _confirmCallback = null;
+let _confirmKeyword  = 'DELETE';
+
+function showConfirmModal({ icon, title, desc, keyword, btnLabel, onConfirm }) {
+  _confirmCallback = onConfirm;
+  _confirmKeyword  = keyword || 'DELETE';
+  document.getElementById('confirmIcon').textContent    = icon  || '⚠️';
+  document.getElementById('confirmTitle').textContent   = title || 'Are you sure?';
+  document.getElementById('confirmDesc').innerHTML      = desc  || '';
+  document.getElementById('confirmInput').value         = '';
+  document.getElementById('confirmInput').placeholder   = `Type ${_confirmKeyword} to confirm`;
+  document.getElementById('confirmOkBtn').textContent   = btnLabel || 'Confirm';
+  document.getElementById('confirmOkBtn').disabled      = true;
+  document.getElementById('confirmInput').classList.remove('valid');
+  document.getElementById('confirmOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('confirmInput').focus(), 200);
+}
+function closeConfirmModal() {
+  document.getElementById('confirmOverlay').classList.remove('open');
+  _confirmCallback = null;
+}
+function onConfirmType() {
+  const val   = document.getElementById('confirmInput').value;
+  const match = val === _confirmKeyword;
+  document.getElementById('confirmOkBtn').disabled = !match;
+  document.getElementById('confirmInput').classList.toggle('valid', match);
+}
+async function onConfirmOk() {
+  if (!_confirmCallback) return;
+  closeConfirmModal();
+  try { await _confirmCallback(); }
+  catch(e) { toast('Error', 'error'); }
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('confirmOverlay').classList.contains('open')) {
+    closeConfirmModal();
+  }
+});
+
 // ── INITIAL LOAD ──
+
+// ── SKELETON HELPERS ──
+function skelStatCards() {
+  // Shimmer the existing stat-value elements — do NOT replace innerHTML (that destroys the IDs)
+  ['ds-students','ds-allocated','ds-unallocated','ds-violations','ds-halls','ds-capacity'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.innerHTML = '<span class="skel skel-stat-val"></span>'; }
+  });
+}
+function skelTableRows(tbodyId, cols, count = 5) {
+  const el = document.getElementById(tbodyId);
+  if (!el) return;
+  el.innerHTML = Array(count).fill(
+    `<tr>${Array(cols).fill(`<td><span class="skel skel-td"></span></td>`).join('')}</tr>`
+  ).join('');
+}
+function skelList(elId, count = 4) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = Array(count).fill(`
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border2)">
+      <span class="skel skel-row med" style="flex:1"></span>
+      <span class="skel skel-bar" style="width:80px;margin:0"></span>
+      <span class="skel skel-stat-sub" style="width:36px;margin:0"></span>
+    </div>`).join('');
+}
+
+// Show skeletons immediately on page load
+skelStatCards();
+skelTableRows('logsBody', 7);
+skelList('hallUtilList');
+skelList('subjectDistList');
+
+// Load nav badges independently so they always show correct counts
+api('/students').then(d => { if (d.total !== undefined) document.getElementById('nb-students').textContent = d.total; }).catch(()=>{});
+api('/halls').then(d => { if (d.data) document.getElementById('nb-halls').textContent = d.data.length; }).catch(()=>{});
+
 loadDashboard();
 </script>
+<!-- ── CONFIRM MODAL ── -->
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-modal">
+    <span class="confirm-icon" id="confirmIcon">⚠️</span>
+    <div class="confirm-title" id="confirmTitle">Are you sure?</div>
+    <div class="confirm-desc" id="confirmDesc"></div>
+    <input class="confirm-input" id="confirmInput" placeholder="" oninput="onConfirmType()"/>
+    <div class="confirm-btns">
+      <button class="btn btn-ghost" onclick="closeConfirmModal()">Cancel</button>
+      <button class="btn btn-warn" id="confirmOkBtn" disabled onclick="onConfirmOk()">Delete</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

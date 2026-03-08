@@ -12,6 +12,7 @@ DROP TABLE IF EXISTS unallocated_students;
 DROP TABLE IF EXISTS seat_allocations;
 DROP TABLE IF EXISTS allocation_logs;
 DROP TABLE IF EXISTS students;
+DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS halls;
 DROP TABLE IF EXISTS users;
 
@@ -28,26 +29,35 @@ CREATE TABLE halls (
 );
 
 -- --------------------------------------------
--- TABLE: users
--- Admin-created coordinator / invigilator accounts
+-- TABLE 2: users
+-- User accounts (coordinator / invigilator / administrator)
 -- --------------------------------------------
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
     id         INT          AUTO_INCREMENT PRIMARY KEY,
     username   VARCHAR(80)  NOT NULL UNIQUE,
     password   VARCHAR(255) NOT NULL,
-    role       ENUM('coordinator','invigilator') NOT NULL,
-    full_name  VARCHAR(150) DEFAULT '',
+    role       ENUM('coordinator','invigilator','administrator') NOT NULL,
     created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
 
--- Default admin seed (login.html hardcodes these — keep in sync)
-INSERT IGNORE INTO users (username, password, role, full_name)
+-- Default seed accounts (passwords will be auto-migrated to bcrypt on first server start)
+INSERT IGNORE INTO users (username, password, role)
 VALUES
-  ('coordinator', 'coord123', 'coordinator', 'Default Coordinator'),
-  ('invigilator', 'invig123', 'invigilator', 'Default Invigilator');
+  ('coordinator', 'coord123', 'coordinator'),
+  ('invigilator', 'invig123', 'invigilator');
 
 -- --------------------------------------------
--- TABLE 2: students
+-- TABLE 3: sessions
+-- --------------------------------------------
+CREATE TABLE sessions (
+    token      VARCHAR(64)  PRIMARY KEY,
+    username   VARCHAR(100) NOT NULL,
+    role       VARCHAR(50)  NOT NULL,
+    created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --------------------------------------------
+-- TABLE 4: students
 -- --------------------------------------------
 CREATE TABLE students (
     student_id   VARCHAR(50)  PRIMARY KEY,
@@ -57,7 +67,7 @@ CREATE TABLE students (
 );
 
 -- --------------------------------------------
--- TABLE 3: seat_allocations
+-- TABLE 5: seat_allocations
 -- --------------------------------------------
 CREATE TABLE seat_allocations (
     allocation_id INT         AUTO_INCREMENT PRIMARY KEY,
@@ -75,7 +85,7 @@ CREATE TABLE seat_allocations (
 );
 
 -- --------------------------------------------
--- TABLE 4: unallocated_students
+-- TABLE 6: unallocated_students
 -- Stores student_name + subject_code directly
 -- to avoid join failures if student is deleted
 -- --------------------------------------------
@@ -88,7 +98,7 @@ CREATE TABLE unallocated_students (
 );
 
 -- --------------------------------------------
--- TABLE 5: allocation_logs
+-- TABLE 7: allocation_logs
 -- --------------------------------------------
 CREATE TABLE allocation_logs (
     log_id                INT  AUTO_INCREMENT PRIMARY KEY,
@@ -146,3 +156,11 @@ SELECT
 FROM halls h
 LEFT JOIN seat_allocations sa ON h.hall_id = sa.hall_id
 GROUP BY h.hall_id, h.hall_name, h.capacity, h.total_rows, h.total_cols;
+-- To remove all users
+-- USE exam_seating;
+
+-- DELETE FROM sessions;
+-- DELETE FROM users;
+
+-- Reset auto-increment so IDs start from 1 again
+-- ALTER TABLE users AUTO_INCREMENT = 1;
