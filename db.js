@@ -11,8 +11,9 @@ const SALT_ROUNDS = 12;
 const pool = mysql.createPool({
   host:             process.env.DB_HOST     || "localhost",
   user:             process.env.DB_USER     || "root",
-  password:         process.env.DB_PASS     || "k123",          // set DB_PASS env var
+  password:         process.env.DB_PASS     || "FotSwCvGOzVoncQaCHLHJmXyTSXmZDJi",          // set DB_PASS env var
   database:         process.env.DB_NAME     || "exam_seating",
+  port:             process.env.DB_PORT     || 3306,
   waitForConnections: true,
   connectionLimit:  10,
   queueLimit:       0,
@@ -52,7 +53,7 @@ pool.getConnection()
 
     conn.release();
   })
-  .catch(err => { console.error("❌ MySQL error:", err.message); process.exit(1); });
+  .catch(err => { console.error("❌ MySQL error:", err.message); });
 
 // ============================================
 // HALLS
