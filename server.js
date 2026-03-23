@@ -10,13 +10,11 @@ const { runAllocationAlgorithm } = require("./allocate");
 const { generatePDF }            = require("./generatePDF");
 
 // Admin credentials
-const ADMIN_CONFIG_PATH = path.join(__dirname, 'admin.config.json');
 function getAdminCreds() {
-  try {
-    if (fs.existsSync(ADMIN_CONFIG_PATH))
-      return JSON.parse(fs.readFileSync(ADMIN_CONFIG_PATH, 'utf8'));
-  } catch (e) {}
-  return { username: 'admin', password: 'admin123' };
+  return {
+    username: process.env.ADMIN_USERNAME || 'admin',
+    password: process.env.ADMIN_PASSWORD || 'admin123',
+  };
 }
 
 // Session store — persisted in DB so server restarts don't log users out
@@ -324,10 +322,7 @@ app.post("/api/reset-admin-password", async (req, res) => {
       return res.status(400).json({ success: false, message: "This endpoint is for admin only" });
     if (newPassword.length < 6)
       return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
-    const tmpPath = ADMIN_CONFIG_PATH + '.tmp';
-    fs.writeFileSync(tmpPath, JSON.stringify({ username: "admin", password: newPassword }, null, 2));
-    fs.renameSync(tmpPath, ADMIN_CONFIG_PATH); // atomic replace — original untouched if crash happens before this
-    res.json({ success: true, message: "Admin password reset successfully" });
+    return res.status(400).json({ success: false, message: "To change admin password, update the ADMIN_PASSWORD environment variable in your deployment dashboard." });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
