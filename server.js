@@ -69,6 +69,7 @@ const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
+  'https://exam-hall-allocation-system.onrender.com',
   process.env.FRONTEND_ORIGIN,       // set this in .env for your production domain e.g. https://examalloc.com
 ].filter(Boolean);
 
