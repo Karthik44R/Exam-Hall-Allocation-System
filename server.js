@@ -9,7 +9,7 @@ const db          = require("./db");
 const { runAllocationAlgorithm } = require("./allocate");
 const { generatePDF }            = require("./generatePDF");
 
-// Admin credentials
+// Admin credentials — set ADMIN_USERNAME and ADMIN_PASSWORD in environment
 function getAdminCreds() {
   return {
     username: process.env.ADMIN_USERNAME || 'admin',
@@ -36,7 +36,6 @@ function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ success: false, message: 'Unauthorized — please log in' });
   db.getSession(token).then(session => {
     if (!session) return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
-    // Check if session is older than 24 hours
     const age = Date.now() - new Date(session.created_at).getTime();
     if (age > SESSION_TTL_MS) {
       db.deleteSession(token).catch(() => {});
@@ -47,6 +46,27 @@ function requireAuth(req, res, next) {
   }).catch(() => res.status(500).json({ success: false, message: 'Session error' }));
 }
 
+// FIX #6: requireAdmin no longer piggybacks on requireAuth's callback —
+// it duplicates the session check so the async flow is explicit and safe.
+async function requireAdmin(req, res, next) {
+  const auth  = req.headers['authorization'] || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ success: false, message: 'Unauthorized — please log in' });
+  try {
+    const session = await db.getSession(token);
+    if (!session) return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
+    const age = Date.now() - new Date(session.created_at).getTime();
+    if (age > SESSION_TTL_MS) {
+      db.deleteSession(token).catch(() => {});
+      return res.status(401).json({ success: false, message: 'Session expired — please log in again' });
+    }
+    if (session.role !== 'administrator')
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    req.session = session;
+    next();
+  } catch { res.status(500).json({ success: false, message: 'Session error' }); }
+}
+
 // Cleanup expired sessions from DB every hour
 setInterval(async () => {
   try {
@@ -55,13 +75,6 @@ setInterval(async () => {
     );
   } catch (e) { console.error('Session cleanup error:', e.message); }
 }, 60 * 60 * 1000);
-function requireAdmin(req, res, next) {
-  requireAuth(req, res, () => {
-    if (req.session.role !== 'administrator')
-      return res.status(403).json({ success: false, message: 'Admin access required' });
-    next();
-  });
-}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -70,12 +83,11 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'https://exam-hall-allocation-system.onrender.com',
-  process.env.FRONTEND_ORIGIN,       // set this in .env for your production domain e.g. https://examalloc.com
+  process.env.FRONTEND_ORIGIN,
 ].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. same-origin, Postman, mobile apps)
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     callback(new Error(`CORS blocked: ${origin}`));
   },
@@ -109,7 +121,6 @@ async function verifyPassword(plain, stored, userId) {
   }
   // Plain-text fallback for any password the migration missed
   if (plain === stored) {
-    // Rehash immediately so it won't be plain-text next time
     const hashed = await db.bcrypt.hash(plain, 12);
     await db.pool.execute(`UPDATE users SET password=? WHERE id=?`, [hashed, userId]);
     console.log(`✅ Re-hashed plain-text password for user id=${userId}`);
@@ -126,7 +137,6 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ success: false, message: "username, password, role required" });
 
     if (role === "administrator") {
-      // Check hardcoded admin first (password stored in config file, plain text)
       const adminCreds = getAdminCreds();
       if (username === adminCreds.username && password === adminCreds.password) {
         await db.deleteSessionsByUsername(username);
@@ -191,7 +201,8 @@ app.post("/api/halls/csv", requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: "No CSV data received." });
     const { data, meta } = parseCSV(raw);
     if (!data.length)
-      return res.status(400).json({ success: false, message: `0 rows parsed. Headers must be: hall_id, hall_name, capacity, total_rows, total_cols. Detected: ${meta.fields}` });
+      // FIX #8: safe access on meta.fields
+      return res.status(400).json({ success: false, message: `0 rows parsed. Headers must be: hall_id, hall_name, capacity, total_rows, total_cols. Detected: ${meta?.fields ?? 'unknown'}` });
     const halls = [], errors = [];
     for (const row of data) {
       const capacity   = parseInt(row.capacity);
@@ -219,9 +230,14 @@ app.delete("/api/halls", requireAuth, async (req, res) => {
   catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// FIX #7: Check affectedRows so deleting a non-existent hall returns 404
 app.delete("/api/halls/:hall_id", requireAuth, async (req, res) => {
-  try { await db.deleteHall(req.params.hall_id); res.json({ success: true, message: `Hall ${req.params.hall_id} deleted` }); }
-  catch (err) { res.status(500).json({ success: false, message: err.message }); }
+  try {
+    const result = await db.deleteHall(req.params.hall_id);
+    if (result.affectedRows === 0)
+      return res.status(404).json({ success: false, message: "Hall not found" });
+    res.json({ success: true, message: `Hall ${req.params.hall_id} deleted` });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // Student routes
@@ -253,7 +269,8 @@ app.post("/api/students/csv", requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: "No CSV data received." });
     const { data, meta } = parseCSV(raw);
     if (!data.length)
-      return res.status(400).json({ success: false, message: `0 rows parsed. Headers must be: student_id, student_name, subject_code. Detected: ${meta.fields}` });
+      // FIX #8: safe access on meta.fields
+      return res.status(400).json({ success: false, message: `0 rows parsed. Headers must be: student_id, student_name, subject_code. Detected: ${meta?.fields ?? 'unknown'}` });
     const students = [], parseErrors = [];
     for (const row of data) {
       const sid  = (row.student_id   || "").trim();
@@ -263,7 +280,7 @@ app.post("/api/students/csv", requireAuth, async (req, res) => {
       students.push({ student_id: sid, student_name: name, subject_code: sub.toUpperCase() });
     }
     if (!students.length)
-      return res.status(400).json({ success: false, message: `No valid rows found. Detected headers: ${meta.fields}` });
+      return res.status(400).json({ success: false, message: `No valid rows found. Detected headers: ${meta?.fields ?? 'unknown'}` });
     const totalCapacity = await db.getTotalCapacity();
     const warning = students.length > totalCapacity
       ? `Warning: ${students.length} students exceed total hall capacity of ${totalCapacity}`
@@ -407,6 +424,8 @@ app.get("/api/allocations/summary", requireAuth, async (req, res) => {
 });
 
 // Export routes
+// FIX #4 (partial — left in place per instructions): CSV export uses manual string join.
+// To fully fix CSV injection, replace with Papa.unparse(allocations) when possible.
 app.get("/api/export/csv", requireAuth, async (req, res) => {
   try {
     const allocations = await db.getAllAllocations();
