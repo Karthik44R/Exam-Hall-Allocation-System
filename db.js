@@ -6,14 +6,14 @@ const mysql  = require("mysql2/promise");
 const bcrypt = require("bcryptjs");
 const SALT_ROUNDS = 12;
 
-// FIX #16: Use environment variables for DB credentials (never hardcode in source)
-// Set these in a .env file or your shell: DB_HOST, DB_USER, DB_PASS, DB_NAME
+// Use environment variables for DB credentials (never hardcode in source)
+// Set these in a .env file or your shell: DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT
 const pool = mysql.createPool({
-  host:             process.env.DB_HOST     || "localhost",
-  user:             process.env.DB_USER     || "root",
-  password:         process.env.DB_PASS     || "FotSwCvGOzVoncQaCHLHJmXyTSXmZDJi",          // set DB_PASS env var
-  database:         process.env.DB_NAME     || "exam_seating",
-  port:             process.env.DB_PORT     || 3306,
+  host:             process.env.DB_HOST || "localhost",
+  user:             process.env.DB_USER || "root",
+  password:         process.env.DB_PASS || "FotSwCvGOzVoncQaCHLHJmXyTSXmZDJi",
+  database:         process.env.DB_NAME || "exam_seating",
+  port:             process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit:  10,
   queueLimit:       0,
@@ -22,6 +22,7 @@ const pool = mysql.createPool({
 pool.getConnection()
   .then(async conn => {
     console.log("✅ MySQL connected");
+
     // Auto-create sessions table if it doesn't exist
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -31,29 +32,36 @@ pool.getConnection()
         created_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    // Also ensure administrator is in the role ENUM
-    await conn.execute(`
-      ALTER TABLE users MODIFY COLUMN role ENUM('coordinator','invigilator','administrator') NOT NULL
-    `).catch(() => {}); // ignore if already correct
+
+    // FIX #10: Only ALTER if 'administrator' is not already in the ENUM
+    const [cols] = await conn.execute(`SHOW COLUMNS FROM users WHERE Field='role'`);
+    const enumVal = cols[0]?.Type || '';
+    if (!enumVal.includes('administrator')) {
+      await conn.execute(`
+        ALTER TABLE users MODIFY COLUMN role ENUM('coordinator','invigilator','administrator') NOT NULL
+      `);
+      console.log("✅ users.role ENUM updated");
+    }
     console.log("✅ Tables verified");
 
-    // ── PASSWORD MIGRATION ──────────────────────────────────────
-    // Hash any plain-text passwords. Bcrypt hashes start with $2a$, $2b$, or $2y$.
-    const isBcrypt = p => /^\$2[aby]\$/.test(p);
-    const [users] = await conn.execute(`SELECT id, password FROM users`);
-    let migrated = 0;
-    for (const u of users) {
-      if (!isBcrypt(u.password)) {
+    // FIX #11: PASSWORD MIGRATION — only fetch users with plain-text passwords
+    const [users] = await conn.execute(
+      `SELECT id, password FROM users WHERE password NOT REGEXP '^\\$2[aby]\\$'`
+    );
+    if (users.length > 0) {
+      for (const u of users) {
         const hashed = await bcrypt.hash(u.password, SALT_ROUNDS);
         await conn.execute(`UPDATE users SET password=? WHERE id=?`, [hashed, u.id]);
-        migrated++;
       }
+      console.log(`✅ Migrated ${users.length} plain-text password(s) to bcrypt`);
     }
-    if (migrated > 0) console.log(`✅ Migrated ${migrated} plain-text password(s) to bcrypt`);
 
     conn.release();
   })
-  .catch(err => { console.error("❌ MySQL error:", err.message); });
+  .catch(err => {
+    console.error("❌ MySQL error:", err.message);
+    process.exit(1); // FIX #9: fail fast if DB is unavailable
+  });
 
 // ============================================
 // HALLS
@@ -311,9 +319,8 @@ const deleteUser = async (id) => {
 };
 
 // ============================================
-// EXPORTS
+// SESSIONS
 // ============================================
-// Session persistence
 const createSession = async (token, username, role) => {
   await pool.execute("INSERT INTO sessions (token, username, role) VALUES (?, ?, ?)", [token, username, role]);
 };
