@@ -6,8 +6,6 @@ const mysql  = require("mysql2/promise");
 const bcrypt = require("bcryptjs");
 const SALT_ROUNDS = 12;
 
-// Use environment variables for DB credentials (never hardcode in source)
-// Set these in a .env file or your shell: DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT
 const pool = mysql.createPool({
   host:             process.env.DB_HOST || "localhost",
   user:             process.env.DB_USER || "root",
@@ -23,7 +21,6 @@ pool.getConnection()
   .then(async conn => {
     console.log("✅ MySQL connected");
 
-    // Auto-create sessions table if it doesn't exist
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS sessions (
         token      VARCHAR(64)  PRIMARY KEY,
@@ -33,7 +30,6 @@ pool.getConnection()
       )
     `);
 
-    // FIX #10: Only ALTER if 'administrator' is not already in the ENUM
     const [cols] = await conn.execute(`SHOW COLUMNS FROM users WHERE Field='role'`);
     const enumVal = cols[0]?.Type || '';
     if (!enumVal.includes('administrator')) {
@@ -44,16 +40,11 @@ pool.getConnection()
     }
     console.log("✅ Tables verified");
 
-    // PASSWORD MIGRATION — hash any plain-text passwords found at startup.
-    // Uses LIKE '$2%' instead of REGEXP because MySQL 8 uses the ICU regex engine
-    // where $ means end-of-string, making \$ patterns unreliable.
-    // All bcrypt hashes start with $2a$, $2b$, or $2y$ — LIKE '$2%' is safe and exact.
     const [users] = await conn.execute(
       `SELECT id, password FROM users WHERE password NOT LIKE '$2%'`
     );
     if (users.length > 0) {
       for (const u of users) {
-        // JS-level guard: skip if already a bcrypt hash (belt-and-suspenders)
         if (/^\$2[aby]\$/.test(u.password)) {
           console.log(`⚠️  Skipping already-hashed password for user id=${u.id}`);
           continue;
@@ -68,7 +59,7 @@ pool.getConnection()
   })
   .catch(err => {
     console.error("❌ MySQL error:", err.message);
-    process.exit(1); // FIX #9: fail fast if DB is unavailable
+    process.exit(1);
   });
 
 // ============================================
@@ -117,24 +108,33 @@ const insertStudent = async (student_id, student_name, subject_code) => {
   return { inserted: r.affectedRows > 0 };
 };
 
+// ✅ OPTIMIZED — single query instead of N queries
 const bulkInsertStudents = async (students) => {
-  let inserted = 0, duplicates = 0;
-  const errors = [];
+  if (!students.length) return { inserted: 0, duplicates: 0, errors: [] };
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    for (const s of students) {
-      const [r] = await conn.execute(
-        `INSERT IGNORE INTO students (student_id, student_name, subject_code) VALUES (?,?,?)`,
-        [s.student_id, s.student_name, s.subject_code]
-      );
-      if (r.affectedRows > 0) inserted++;
-      else { duplicates++; errors.push(`Duplicate: ${s.student_id}`); }
-    }
+
+    const placeholders = students.map(() => '(?,?,?)').join(',');
+    const values = students.flatMap(s => [s.student_id, s.student_name, s.subject_code]);
+
+    const [result] = await conn.execute(
+      `INSERT IGNORE INTO students (student_id, student_name, subject_code) VALUES ${placeholders}`,
+      values
+    );
+
     await conn.commit();
-  } catch (err) { await conn.rollback(); throw err; }
-  finally { conn.release(); }
-  return { inserted, duplicates, errors };
+
+    const inserted   = result.affectedRows;
+    const duplicates = students.length - inserted;
+    return { inserted, duplicates, errors: [] };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 };
 
 const getAllStudents = async () => {
@@ -181,22 +181,33 @@ const clearStudents = async () => {
 // ============================================
 // SEAT ALLOCATIONS
 // ============================================
+
+// ✅ OPTIMIZED — single query instead of N queries
 const bulkInsertAllocations = async (allocations) => {
   if (!allocations.length) return { inserted: 0 };
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    for (const a of allocations) {
-      await conn.execute(
-        `INSERT INTO seat_allocations (student_id, hall_id, seat_row, seat_col, seat_label)
-         VALUES (?,?,?,?,?)`,
-        [a.student_id, a.hall_id, a.seat_row, a.seat_col, a.seat_label]
-      );
-    }
+
+    const placeholders = allocations.map(() => '(?,?,?,?,?)').join(',');
+    const values = allocations.flatMap(a => [
+      a.student_id, a.hall_id, a.seat_row, a.seat_col, a.seat_label
+    ]);
+
+    await conn.execute(
+      `INSERT INTO seat_allocations (student_id, hall_id, seat_row, seat_col, seat_label) VALUES ${placeholders}`,
+      values
+    );
+
     await conn.commit();
     return { inserted: allocations.length };
-  } catch (err) { await conn.rollback(); throw err; }
-  finally { conn.release(); }
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 };
 
 const getAllAllocations = async () => {
@@ -242,21 +253,35 @@ const clearAllocations = async () => {
 // ============================================
 // UNALLOCATED STUDENTS
 // ============================================
+
+// ✅ OPTIMIZED — single query instead of N queries
 const bulkInsertUnallocated = async (students) => {
   if (!students.length) return;
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    for (const s of students) {
-      await conn.execute(
-        `INSERT IGNORE INTO unallocated_students (student_id, student_name, subject_code, reason)
-         VALUES (?,?,?,?)`,
-        [s.student_id, s.student_name || '', s.subject_code || '', s.reason || 'Capacity overflow']
-      );
-    }
+
+    const placeholders = students.map(() => '(?,?,?,?)').join(',');
+    const values = students.flatMap(s => [
+      s.student_id,
+      s.student_name || '',
+      s.subject_code || '',
+      s.reason || 'Capacity overflow'
+    ]);
+
+    await conn.execute(
+      `INSERT IGNORE INTO unallocated_students (student_id, student_name, subject_code, reason) VALUES ${placeholders}`,
+      values
+    );
+
     await conn.commit();
-  } catch (err) { await conn.rollback(); throw err; }
-  finally { conn.release(); }
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 };
 
 const getUnallocatedStudents = async () => {
@@ -357,7 +382,6 @@ const deleteSession = async (token) => {
   await pool.execute("DELETE FROM sessions WHERE token = ?", [token]);
 };
 
-// Clear ALL sessions for a username — called before login so stale role data can't persist
 const deleteSessionsByUsername = async (username) => {
   await pool.execute("DELETE FROM sessions WHERE username = ?", [username]);
 };
