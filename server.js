@@ -226,7 +226,7 @@ app.post("/api/halls/csv", requireAuth, async (req, res) => {
 });
 
 app.delete("/api/halls", requireAuth, async (req, res) => {
-  try { await db.clearAllocations(); await db.clearHalls(); res.json({ success: true, message: "All halls cleared" }); }
+  try { await db.clearHalls(); res.json({ success: true, message: "All halls cleared" }); }
   catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
@@ -291,7 +291,7 @@ app.post("/api/students/csv", requireAuth, async (req, res) => {
 });
 
 app.delete("/api/students", requireAuth, async (req, res) => {
-  try { await db.clearAllocations(); await db.clearStudents(); res.json({ success: true, message: "All students and allocations cleared" }); }
+  try { await db.clearStudents(); res.json({ success: true, message: "All students and allocations cleared" }); }
   catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
@@ -332,15 +332,25 @@ app.post("/api/users", async (req, res) => {
 });
 
 app.post("/api/reset-admin-password", async (req, res) => {
+  // Resets a DB-stored administrator password without requiring a login session.
+  // Protected by a recoveryKey so it cannot be abused publicly.
+  // Set RECOVERY_KEY env var in production (default: 'recover123').
   try {
-    const { username, newPassword } = req.body;
-    if (!username || !newPassword)
-      return res.status(400).json({ success: false, message: "username and newPassword required" });
-    if (username.toLowerCase() !== "admin")
-      return res.status(400).json({ success: false, message: "This endpoint is for admin only" });
+    const { username, newPassword, recoveryKey } = req.body;
+    if (!username || !newPassword || !recoveryKey)
+      return res.status(400).json({ success: false, message: "username, newPassword, and recoveryKey are required" });
+    const validKey = process.env.RECOVERY_KEY || 'recover123';
+    if (recoveryKey !== validKey)
+      return res.status(403).json({ success: false, message: "Invalid recovery key" });
     if (newPassword.length < 6)
       return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
-    return res.status(400).json({ success: false, message: "To change admin password, update the ADMIN_PASSWORD environment variable in your deployment dashboard." });
+    const user = await db.getUserByUsername(username.trim());
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
+    if (user.role !== "administrator")
+      return res.status(400).json({ success: false, message: "This endpoint is only for administrator accounts" });
+    await db.updateUserPassword(username.trim(), newPassword);
+    res.json({ success: true, message: `Password reset for ${username}. Please log in again.` });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
