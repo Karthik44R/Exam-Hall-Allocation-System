@@ -633,7 +633,7 @@
     btn.innerHTML = `<span class="spinner"></span>Authenticating...`;
 
     try {
-      const res  = await fetch('http://localhost:3000/api/login', {
+      const res  = await fetch('/api/login', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username, password, role: currentRole }),
@@ -718,7 +718,7 @@
 
     try {
       // Register new admin account — open endpoint, no auth token needed
-      const res  = await fetch('http://localhost:3000/api/users', {
+      const res  = await fetch('/api/users', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username, password, role: 'administrator' }),
@@ -790,8 +790,8 @@
       // Use reset-admin-password for 'admin', reset-password for registered users
       // Both endpoints are open (no auth required) since user is not logged in here
       const endpoint = username.toLowerCase() === 'admin'
-        ? 'http://localhost:3000/api/reset-admin-password'
-        : 'http://localhost:3000/api/reset-password';
+        ? '/api/reset-admin-password'
+        : '/api/reset-password';
 
       const res = await fetch(endpoint, {
         method:  'POST',
