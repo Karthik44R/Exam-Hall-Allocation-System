@@ -44,12 +44,20 @@ pool.getConnection()
     }
     console.log("✅ Tables verified");
 
-    // FIX #11: PASSWORD MIGRATION — only fetch users with plain-text passwords
+    // PASSWORD MIGRATION — hash any plain-text passwords found at startup.
+    // Uses LIKE '$2%' instead of REGEXP because MySQL 8 uses the ICU regex engine
+    // where $ means end-of-string, making \$ patterns unreliable.
+    // All bcrypt hashes start with $2a$, $2b$, or $2y$ — LIKE '$2%' is safe and exact.
     const [users] = await conn.execute(
-      `SELECT id, password FROM users WHERE password NOT REGEXP '^\\$2[aby]\\$'`
+      `SELECT id, password FROM users WHERE password NOT LIKE '$2%'`
     );
     if (users.length > 0) {
       for (const u of users) {
+        // JS-level guard: skip if already a bcrypt hash (belt-and-suspenders)
+        if (/^\$2[aby]\$/.test(u.password)) {
+          console.log(`⚠️  Skipping already-hashed password for user id=${u.id}`);
+          continue;
+        }
         const hashed = await bcrypt.hash(u.password, SALT_ROUNDS);
         await conn.execute(`UPDATE users SET password=? WHERE id=?`, [hashed, u.id]);
       }
@@ -159,8 +167,15 @@ const getStudentCountBySubject = async () => {
 };
 
 const clearStudents = async () => {
-  const [r] = await pool.execute(`DELETE FROM students`);
-  return r;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute(`DELETE FROM unallocated_students`);
+    await conn.execute(`DELETE FROM seat_allocations`);
+    await conn.execute(`DELETE FROM students`);
+    await conn.commit();
+  } catch (err) { await conn.rollback(); throw err; }
+  finally { conn.release(); }
 };
 
 // ============================================
@@ -202,7 +217,15 @@ const deleteStudent = async (student_id) => {
 };
 
 const clearHalls = async () => {
-  await pool.execute("DELETE FROM halls");
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute(`DELETE FROM unallocated_students`);
+    await conn.execute(`DELETE FROM seat_allocations`);
+    await conn.execute(`DELETE FROM halls`);
+    await conn.commit();
+  } catch (err) { await conn.rollback(); throw err; }
+  finally { conn.release(); }
 };
 
 const clearAllocations = async () => {
