@@ -1118,16 +1118,12 @@ async function addStudent() {
 }
 
 async function deleteStudent(id) {
-  showConfirmModal({
-    icon: '👥', title: 'Delete Student?',
-    desc: `Remove student <strong>${id}</strong>? This will also remove their seat allocation.`,
-    keyword: 'DELETE', btnLabel: '🗑 Delete Student',
-    onConfirm: async () => {
-      const res = await api('/students/' + id, 'DELETE');
-      if (res.success) { toast(`Student ${id} deleted`, 'warn'); loadStudents(); }
-      else toast(res.message, 'error');
-    }
-  });
+  if (!confirm(`Delete student ${id}? This will also remove their seat allocation.`)) return;
+  try {
+    const res = await api('/students/' + id, 'DELETE');
+    if (res.success) { toast(`Student ${id} deleted`, 'warn'); loadStudents(); }
+    else toast(res.message, 'error');
+  } catch(e) { toast('Error deleting student', 'error'); }
 }
 
 async function uploadStudentCSV() {
