@@ -1660,7 +1660,7 @@ function setUserFilter(role) {
     invigilator:   { id:'uft-invig', border:'var(--blue)', bg:'var(--blue-soft)',      color:'var(--blue)' },
     administrator: { id:'uft-admin', border:'var(--warn)', bg:'rgba(245,158,11,0.08)', color:'var(--warn)' },
   };
-  ['all','coordinator','invigilator','administator'].forEach(r => {
+  ['all','coordinator','invigilator','administrator'].forEach(r => {
     const el = document.getElementById(styles[r].id);
     if (!el) return;
     if (r === role) {
@@ -1704,7 +1704,7 @@ function renderUsersTable() {
       <td class="td-mono">${esc(u.username)}</td>
       <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
       <td class="td-mono" style="color:var(--muted);font-size:11px">${date}</td>
-      <td><button class="btn btn-sm ${isCoord?'btn-teal-soft':isAdmin?'btn-warn':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button></td>
+      <td>${isAdmin ? '—' : `<button class="btn btn-sm ${isCoord?'btn-teal-soft':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button>`}</td>
     </tr>`;
   }).join('');
 }
