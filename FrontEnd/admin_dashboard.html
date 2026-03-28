@@ -1704,11 +1704,11 @@ function renderUsersTable() {
       <td class="td-mono">${esc(u.username)}</td>
       <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
       <td class="td-mono" style="color:var(--muted);font-size:11px">${date}</td>
-      <td><button class="btn btn-sm ${isCoord?'btn-warn':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button></td>
+      <td><button class="btn btn-sm ${isCoord?'btn-teal-soft':isAdmin?'btn-warn':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button></td>
     </tr>`;
   }).join('');
 }
-//  'btn-teal-soft':isAdmin?
+  
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── EXPORT (with auth token) ──
