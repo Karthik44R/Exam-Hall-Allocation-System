@@ -1704,7 +1704,7 @@ function renderUsersTable() {
       <td class="td-mono">${esc(u.username)}</td>
       <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
       <td class="td-mono" style="color:var(--muted);font-size:11px">${date}</td>
-      <td>${isAdmin ? '—' : `<button class="btn btn-sm ${isCoord?'btn-teal-soft':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button>`}</td>
+      <td>${isAdmin ? '   —' : `<button class="btn btn-sm ${isCoord?'btn-teal-soft':'btn-blue-soft'}" onclick="deleteUserAccount(${u.id},'${esc(u.username)}')">🗑 Delete</button>`}</td>
     </tr>`;
   }).join('');
 }
