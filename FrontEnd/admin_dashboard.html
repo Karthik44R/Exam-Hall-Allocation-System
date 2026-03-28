@@ -1086,15 +1086,15 @@ function renderStudents(list) {
     tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state" style="padding:24px"><div class="empty-icon">👥</div><div class="empty-text">No students yet.</div></div></td></tr>`;
     return;
   }
-  tbody.innerHTML = list.map(s => `
-    <tr>
-      <td class="td-mono">${s.student_id}</td>
-      <td>${s.student_name}</td>
-      <td><span class="badge badge-blue">${s.subject_code}</span></td>
-      <td class="td-mono" style="color:var(--muted)">${new Date(s.created_at).toLocaleDateString()}</td>
-      <td><button class="btn btn-warn btn-sm" onclick="deleteStudent('${s.student_id}')">🗑 Delete</button></td>
-    </tr>`).join('');
-}
+//   tbody.innerHTML = list.map(s => `
+//     <tr>
+//       <td class="td-mono">${s.student_id}</td>
+//       <td>${s.student_name}</td>
+//       <td><span class="badge badge-blue">${s.subject_code}</span></td>
+//       <td class="td-mono" style="color:var(--muted)">${new Date(s.created_at).toLocaleDateString()}</td>
+//       <td><button class="btn btn-warn btn-sm" onclick="deleteStudent('${s.student_id}')">🗑 Delete</button></td>
+//     </tr>`).join('');
+// }
 
 function filterStudents() {
   const q = document.getElementById('stuSearch').value.toLowerCase();
