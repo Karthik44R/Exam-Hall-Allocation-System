@@ -1,241 +1,259 @@
-// ============================================================
-// allocate.js — Exam Alloc Seating Algorithm  v2
-// ============================================================
-//
-// Algorithms / Techniques:
-//   1. Round Robin Distribution   : Subject interleaving before seating
-//   2. Position-Aware Swap Search : Candidate MUST be conflict-free at target seat
-//   3. 4-Directional Adjacency    : Left, Right, Up, Down neighbor checks
-//   4. Gap Seating (NEW)          : Skip seat & leave empty gap when:
-//                                   - No valid swap exists in lookahead window
-//                                   - Remaining global capacity > students left
-//                                   - Avoids forcing a violation when spare seats exist
-//   5. Forced Violation Fallback  : Only fires when capacity is truly exhausted
-//   6. Global Capacity Tracking   : Accurate remaining-slot accounting across halls
-//
-// ============================================================
-// Why v1 had tail violations:
-//   Round-robin runs out of "partner" subjects first. The dominant
-//   subject fills the tail of the queue with consecutive same-subject
-//   students. v1 could only look left, not up/down, and its swap
-//   candidate check only tested subject ≠ conflictSubject — it didn't
-//   verify the candidate was actually conflict-free at that exact seat.
-//
-// v2 fixes:
-//   • checkAdjacency now checks all 4 directions
-//   • findSwappableStudent passes the live grid + seat coordinates,
-//     so it only accepts candidates that are TRULY non-conflicting
-//   • When no valid swap is found but spare capacity exists (hall has
-//     more seats than students left), skip the seat and leave an empty
-//     gap — the student is placed at the next seat with no conflict
-//   • violations only increment when capacity is fully exhausted
-// ============================================================
 
 /**
- * Main entry point
- * @param {Object} groupedStudents  { subject_code: [{ student_id, student_name, subject_code }] }
- * @param {Array}  halls            [{ hall_id, hall_name, capacity, total_rows, total_cols }]
- * @returns {{ allocations, unallocated, violations }}
+ * @param {Object} groupedStudents  { dept_code: [student, ...] }
+ *   student = { student_id, student_name, dept_code, roll_no? }
+ *
+ * @param {Array}  halls
+ *   [{ hall_id, hall_name, capacity, total_rows, total_cols }]
+ *   total_cols must be even.
+ *
+ * @param {Array}  [deptOrder]
+ *   Fixed dept ordering — controls which dept goes in which column slot.
+ *   MUST stay the same for all halls (changing it causes roll-number skips).
+ *   Example: ['Civil', 'EEE', 'Mech', 'ECE', 'CSE', 'Chemical']
+ *
+ * @returns {{ allocations, unallocated, violations, hallAssignments, summary }}
  */
-function runAllocationAlgorithm(groupedStudents, halls) {
-  const allocations = [];
-  const unallocated = [];
-  let   violations  = 0;
+function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
+  const allocations     = [];
+  const unallocated     = [];
+  const hallAssignments = {};
+  const summary         = [];
 
-  // ── STEP 1: Round Robin interleave ──────────────────────────────────────────
-  // e.g. subjects A,B,C → [A1,B1,C1,A2,B2,C2,...] — natural subject separation
-  const subjects     = Object.keys(groupedStudents);
-  const queues       = subjects.map(s => [...groupedStudents[s]]);
-  const studentQueue = roundRobinMerge(queues);
+  // ── Placeholder names to filter out ───────────────────────────────────────
+  const PLACEHOLDERS = new Set(['self report', 'n/a', 'na', '-', 'null', 'none', 'absent', '']);
 
-  const totalStudents = studentQueue.length;
-  const totalCapacity = halls.reduce((sum, h) => sum + h.capacity, 0);
+  function isValidStudent(s) {
+    if (!s.student_id || String(s.student_id).trim() === '') return false;
+    const name = String(s.student_name || '').trim().toLowerCase();
+    return !PLACEHOLDERS.has(name);
+  }
 
-  // globalConsumed tracks all seats consumed (placed + skipped) across ALL halls
-  // so the gap-decision formula stays accurate even as we move between halls
-  let globalConsumed = 0;
-  let studentIdx     = 0;
+  // ── Step 1: Fix dept order — NEVER changes between halls ──────────────────
+  const allDepts = deptOrder
+    ? [...deptOrder].filter(d => groupedStudents[d])
+    : Object.keys(groupedStudents).sort();
 
-  // ── STEP 2: Greedy Hall-by-Hall Allocation ──────────────────────────────────
-  for (const hall of halls) {
-    const grid       = buildEmptyGrid(hall.total_rows, hall.total_cols);
-    let   hallConsumed = 0; // seats placed + skipped inside this hall
+  // ── Step 2: Sort students by roll number, filtering placeholders ───────────
+  //    Roll IDs like "24001A0557": split into prefix + numeric tail for sorting.
+  //    Gaps in numbers = valid enrollment gaps, not algorithm errors.
+  function rollSortKey(s) {
+    const id = String(s.roll_no ?? s.student_id ?? '');
+    const m  = id.match(/^(.*?)(\d+)$/);
+    return m ? { prefix: m[1], num: parseInt(m[2], 10) } : { prefix: id, num: 0 };
+  }
 
-    outer:
-    for (let row = 1; row <= hall.total_rows; row++) {
-      for (let col = 1; col <= hall.total_cols; col++) {
+  const queues = {};
+  for (const dept of allDepts) {
+    queues[dept] = (groupedStudents[dept] || [])
+      .filter(isValidStudent)
+      .map(s => ({ ...s }))
+      .sort((a, b) => {
+        const ka = rollSortKey(a), kb = rollSortKey(b);
+        if (ka.prefix !== kb.prefix) return ka.prefix.localeCompare(kb.prefix);
+        return ka.num - kb.num;
+      });
+  }
 
-        if (hallConsumed  >= hall.capacity)       break outer;
-        if (studentIdx    >= studentQueue.length) break outer;
+  // ── Step 3: Per-hall quotas — fixed 8 per dept, last hall takes rest ────────
+  //
+  //    Every hall (except the last) gets exactly SEATS_PER_DEPT students
+  //    per dept — matching the column capacity of a full 8-row hall.
+  //    The last hall takes whatever remains for each dept naturally.
+  //
+  //    SEATS_PER_DEPT = 8  (4 odd-row seats + 4 even-row seats per column pair)
+  //    Override per hall using hall.total_rows if rooms differ in size.
 
-        const r       = row - 1;           // 0-indexed for grid
-        const c       = col - 1;
-        const student = studentQueue[studentIdx];
+  const SEATS_PER_DEPT = 8;
+  const N = halls.length;
+  const quotas = halls.map(() => ({}));
 
-        // ── 4-Direction Adjacency Check ────────────────────────────────────
-        const hasConflict = checkAdjacency(grid, r, c, student.subject_code);
+  for (const dept of allDepts) {
+    let remaining = queues[dept].length;
 
-        if (!hasConflict) {
-          // ✅  Clean placement — no conflict at this seat
-          placeStudent(grid, r, c, student, hall, row, col, allocations);
-          hallConsumed++;
-          studentIdx++;
+    for (let i = 0; i < N; i++) {
+      if (remaining === 0) { quotas[i][dept] = 0; continue; }
 
-        } else {
-          // ── Position-Aware Swap ──────────────────────────────────────────
-          // Scan ahead for a student whose subject does NOT conflict
-          // at this EXACT seat position (checks all 4 neighbors on live grid)
-          const swapIdx = findSwappableStudent(studentQueue, studentIdx, grid, r, c);
+      let quota;
+      if (i < N - 1) {
+        // Fixed 8 per dept (or hall's own row count if different room size)
+        const fixed = halls[i].total_rows; // = 8 for standard halls
+        quota = Math.min(fixed, remaining);
+      } else {
+        // Last hall: take everything left
+        quota = remaining;
+      }
 
-          if (swapIdx !== -1) {
-            // Swap guaranteed to be conflict-free — place immediately
-            [studentQueue[studentIdx], studentQueue[swapIdx]] =
-              [studentQueue[swapIdx], studentQueue[studentIdx]];
+      quotas[i][dept] = quota;
+      remaining      -= quota;
+    }
+  }
 
-            const swapped = studentQueue[studentIdx];
-            placeStudent(grid, r, c, swapped, hall, row, col, allocations);
-            hallConsumed++;
-            studentIdx++;
+  // ── Step 4: Place students hall by hall ───────────────────────────────────
+  for (let hi = 0; hi < halls.length; hi++) {
+    const hall      = halls[hi];
+    const hallQuota = quotas[hi];
 
-          } else {
-            // ── Gap Seating vs Forced Violation ─────────────────────────────
-            //
-            // Gap seating condition:
-            //   remaining global capacity > students still waiting
-            //   i.e. we have at least one extra seat to "waste" as a gap
-            //
-            // By skipping this seat, the student will be tried at the
-            // next position which likely has different neighbors — resolving
-            // the conflict without any violation at all.
-            //
-            // FIX #19: Use globalConsumed + hallConsumed so skipped seats in the
-            // current hall are accounted for in the gap-decision formula.
-            const studentsLeft      = totalStudents - studentIdx;
-            const remainingCapacity = totalCapacity - (globalConsumed + hallConsumed);
-
-            if (remainingCapacity > studentsLeft) {
-              // ✅  Gap skip — leave seat empty, student retried next iteration
-              // Grid cell stays null (visible empty gap in the seating chart)
-              hallConsumed++;
-              // studentIdx intentionally NOT incremented — same student,
-              // next seat will have different neighbors
-
-            } else {
-              // ⚠️  Capacity exhausted — cannot afford a gap
-              // Force-place and log as violation
-              violations++;
-              placeStudent(grid, r, c, student, hall, row, col, allocations);
-              hallConsumed++;
-              studentIdx++;
-            }
-          }
-        }
+    for (const dept of allDepts) {
+      if (hallQuota[dept] > 0 && hallAssignments[dept] === undefined) {
+        hallAssignments[dept] = hall.hall_id;
       }
     }
 
-    globalConsumed += hallConsumed;
-  }
+    const result = seatHall(hall, allDepts, queues, hallQuota);
+    allocations.push(...result.allocations);
 
-  // ── STEP 3: Overflow — students remaining after all halls filled ────────────
-  while (studentIdx < studentQueue.length) {
-    const s = studentQueue[studentIdx++];
-    unallocated.push({
-      student_id:   s.student_id,
-      student_name: s.student_name || '',
-      subject_code: s.subject_code || '',
-      reason:       'Capacity overflow — no seats remaining across all halls',
+    const deptCounts = {};
+    for (const a of result.allocations) {
+      deptCounts[a.dept_code] = (deptCounts[a.dept_code] || 0) + 1;
+    }
+    summary.push({
+      hall_id:     hall.hall_id,
+      hall_name:   hall.hall_name,
+      total:       result.allocations.length,
+      dept_counts: deptCounts,
+      violations:  result.violations,
     });
   }
 
-  return { allocations, unallocated, violations };
-}
-
-// ============================================================
-// HELPER: placeStudent
-// Writes subject to grid and pushes allocation record
-// ============================================================
-function placeStudent(grid, r, c, student, hall, row, col, allocations) {
-  grid[r][c] = student.subject_code;
-  allocations.push({
-    student_id: student.student_id,
-    hall_id:    hall.hall_id,
-    seat_row:   row,
-    seat_col:   col,
-    seat_label: `R${row}C${col}`,
-  });
-}
-
-// ============================================================
-// HELPER: checkAdjacency  (4-directional)
-// Returns true if any of the 4 orthogonal neighbors (L/R/U/D)
-// holds the same subject_code as the candidate student.
-// Diagonal neighbors are NOT checked (exam convention).
-// ============================================================
-function checkAdjacency(grid, r, c, subjectCode) {
-  const rows = grid.length;
-  const cols = grid[0].length;
-
-  for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    const nr = r + dr;
-    const nc = c + dc;
-    if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] === subjectCode) {
-      return true; // conflict found
+  // ── Step 5: Remaining in queues = truly unallocated ───────────────────────
+  for (const dept of allDepts) {
+    for (const s of queues[dept]) {
+      unallocated.push({
+        student_id:   s.student_id,
+        student_name: s.student_name || '',
+        dept_code:    dept,
+        subject_code: s.subject_code || dept,
+        reason:       'No remaining hall capacity',
+      });
     }
+    queues[dept] = [];
   }
-  return false;
+
+  const totalViolations = summary.reduce((sum, h) => sum + h.violations, 0);
+  return { allocations, unallocated, violations: totalViolations, hallAssignments, summary };
 }
 
-// ============================================================
-// HELPER: findSwappableStudent  (position-aware)
-//
-// v1 searched for any student with subject ≠ conflictSubject.
-// That candidate could still conflict with an UP/DOWN neighbor.
-//
-// v2 passes the live grid + target (r, c) and calls checkAdjacency
-// directly on each candidate — so the returned candidate is
-// GUARANTEED to be placeable at this exact seat with zero conflict.
-//
-// Lookahead: 30 students (O(1) cap, handles heavy subject skew)
-// ============================================================
-function findSwappableStudent(queue, currentIdx, grid, r, c, lookahead = 30) {
-  const limit = Math.min(currentIdx + 1 + lookahead, queue.length);
 
-  for (let i = currentIdx + 1; i < limit; i++) {
-    if (!checkAdjacency(grid, r, c, queue[i].subject_code)) {
-      return i; // this candidate fits cleanly
+// ============================================================
+// seatHall — places students in one hall
+// ============================================================
+function seatHall(hall, allDepts, queues, hallQuota) {
+  const allocations = [];
+  const R           = hall.total_rows;
+  const C           = hall.total_cols;
+  const numGroups   = Math.floor(C / 2);
+
+  // Build seat list per dept slot: left col rows first, then right col rows
+  const seatLists = {};
+  for (let gi = 0; gi < numGroups; gi++) {
+    for (let parity = 0; parity < 2; parity++) {
+      const deptIdx = gi * 2 + parity;
+      const seats   = [];
+      for (const col of [gi + 1, gi + 1 + numGroups]) {
+        for (let row = 1 + parity; row <= R; row += 2) {
+          seats.push([row, col]);
+        }
+      }
+      seatLists[deptIdx] = seats;
     }
   }
 
-  return -1; // no suitable swap found in window
-}
+  const seatMap = {};
 
-// ============================================================
-// HELPER: Round Robin Merge
-// Interleaves students from all subject queues evenly
-// Input : [[A1,A2,A3], [B1,B2], [C1]]
-// Output: [A1, B1, C1, A2, B2, A3]
-// ============================================================
-function roundRobinMerge(queues) {
-  const result = [];
-  const q      = queues.map(arr => [...arr]);
-  let   i      = 0;
+  for (let deptIdx = 0; deptIdx < allDepts.length && deptIdx < numGroups * 2; deptIdx++) {
+    const dept = allDepts[deptIdx];
+    if (!dept || !queues[dept]) continue;
 
-  while (q.some(arr => arr.length > 0)) {
-    const idx = i % q.length;
-    if (q[idx].length > 0) result.push(q[idx].shift());
-    i++;
+    const allowed = hallQuota[dept] || 0;
+    const seats   = seatLists[deptIdx] || [];
+    let placed    = 0;
+
+    for (const [row, col] of seats) {
+      if (placed >= allowed)         break;
+      if (queues[dept].length === 0) break;
+      seatMap[`${row},${col}`] = { student: queues[dept].shift(), dept };
+      placed++;
+    }
   }
 
-  return result;
+  // Emit in row-first display order
+  for (let row = 1; row <= R; row++) {
+    for (let col = 1; col <= C; col++) {
+      const entry = seatMap[`${row},${col}`];
+      if (!entry) continue;
+      allocations.push({
+        student_id:   entry.student.student_id,
+        student_name: entry.student.student_name || '',
+        dept_code:    entry.dept,
+        subject_code: entry.student.subject_code || entry.dept,
+        hall_id:      hall.hall_id,
+        seat_row:     row,
+        seat_col:     col,
+        seat_label:   `R${row}C${col}`,
+      });
+    }
+  }
+
+  return { allocations, violations: scan8Violations(seatMap, R, C) };
 }
 
+
 // ============================================================
-// HELPER: Build Empty Grid
-// Returns a 2D array of nulls representing an empty hall
+// scan8Violations — counts same-dept 8-directional adjacent pairs
 // ============================================================
-function buildEmptyGrid(rows, cols) {
-  return Array.from({ length: rows }, () => Array(cols).fill(null));
+function scan8Violations(seatMap, R, C) {
+  let count = 0;
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for (let row = 1; row <= R; row++) {
+    for (let col = 1; col <= C; col++) {
+      const here = seatMap[`${row},${col}`];
+      if (!here) continue;
+      for (const [dr, dc] of dirs) {
+        const nr = row + dr, nc = col + dc;
+        if (nr < 1 || nr > R || nc < 1 || nc > C) continue;
+        const there = seatMap[`${nr},${nc}`];
+        if (there && there.dept === here.dept) count++;
+      }
+    }
+  }
+  return count;
 }
+
 
 // ============================================================
 module.exports = { runAllocationAlgorithm };
+
+
+// ============================================================
+// USAGE EXAMPLE
+// ============================================================
+/*
+
+const groupedStudents = {
+  'Civil':    [{ student_id: '24001A0101', dept_code: 'Civil' }, ...],
+  'EEE':      [...],
+  'Mech':     [...],
+  'ECE':      [...],
+  'CSE':      [...],      // more students than others — handled correctly now
+  'Chemical': [...],
+};
+
+const halls = [
+  { hall_id: '201', hall_name: 'Room 201', total_rows: 8, total_cols: 6, capacity: 48 },
+  { hall_id: '202', hall_name: 'Room 202', total_rows: 8, total_cols: 6, capacity: 48 },
+  // ...
+  { hall_id: '209', hall_name: 'Room 209', total_rows: 8, total_cols: 6, capacity: 48 },
+];
+
+const deptOrder = ['Civil', 'EEE', 'Mech', 'ECE', 'CSE', 'Chemical'];
+
+const { allocations, unallocated, violations, summary } =
+  runAllocationAlgorithm(groupedStudents, halls, deptOrder);
+
+console.log('Unallocated:', unallocated.length);  // → 0
+console.log('Violations:',  violations);           // → 0
+
+summary.forEach(h => console.log(h.hall_id, h.total, h.dept_counts));
+
+*/
