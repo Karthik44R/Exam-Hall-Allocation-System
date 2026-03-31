@@ -1,5 +1,5 @@
 /**
- * FINAL Exam Seating Allocation (STRICT + OPTIMIZED)
+ * FINAL Exam Seating Allocation (STRICT + OPTIMIZED + NO DUPLICATES)
  */
 
 function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
@@ -43,22 +43,24 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
 
     const result = seatHallStrict(hall, allDepts, queues);
 
-    //  Phase 2 optimization
-    improveAllocation(hall, result.allocations, queues);
+    // Phase 2 optimization (safe)
+    improveAllocation(hall, result.seatMap, result.allocMap, queues);
 
-    allocations.push(...result.allocations);
+    const finalAllocations = Object.values(result.allocMap);
+
+    allocations.push(...finalAllocations);
 
     const deptCounts = {};
-    for (const a of result.allocations) {
+    for (const a of finalAllocations) {
       deptCounts[a.dept_code] = (deptCounts[a.dept_code] || 0) + 1;
     }
 
     summary.push({
       hall_id: hall.hall_id,
       hall_name: hall.hall_name,
-      total: result.allocations.length,
+      total: finalAllocations.length,
       dept_counts: deptCounts,
-      violations: result.violations
+      violations: 0
     });
 
     for (const dept of Object.keys(deptCounts)) {
@@ -79,20 +81,18 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
     }
   }
 
-  const totalViolations = summary.reduce((s, h) => s + h.violations, 0);
-
-  return { allocations, unallocated, violations: totalViolations, hallAssignments, summary };
+  return { allocations, unallocated, violations: 0, hallAssignments, summary };
 }
 
 
 // ============================================================
-// STRICT SEATING
+// STRICT SEATING (NO VIOLATIONS)
 // ============================================================
 
 function seatHallStrict(hall, allDepts, queues) {
 
-  const allocations = [];
   const seatMap = {};
+  const allocMap = {};
 
   const R = hall.total_rows;
   const C = hall.total_cols;
@@ -115,7 +115,6 @@ function seatHallStrict(hall, allDepts, queues) {
       [0,1],[1,0],[1,1],[1,-1],
       [0,-1],[-1,0],[-1,-1],[-1,1]
     ];
-
     for (const [dr, dc] of dirs) {
       if (seatMap[`${row+dr},${col+dc}`] === dept) return true;
     }
@@ -124,7 +123,6 @@ function seatHallStrict(hall, allDepts, queues) {
 
   function getSortedDepts() {
     const arr = allDepts.filter(d => queues[d].length > 0);
-
     arr.sort((a, b) => queues[b].length - queues[a].length);
 
     for (let i = 0; i < Math.min(3, arr.length); i++) {
@@ -145,9 +143,11 @@ function seatHallStrict(hall, allDepts, queues) {
 
         const student = queues[dept].shift();
 
-        seatMap[`${row},${col}`] = dept;
+        const key = `${row},${col}`;
 
-        allocations.push({
+        seatMap[key] = dept;
+
+        allocMap[key] = {
           student_id: student.student_id,
           student_name: student.student_name || '',
           dept_code: dept,
@@ -156,38 +156,25 @@ function seatHallStrict(hall, allDepts, queues) {
           seat_row: row,
           seat_col: col,
           seat_label: `R${row}C${col}`
-        });
+        };
 
         break;
       }
     }
   }
 
-  return {
-    allocations,
-    violations: 0 // guaranteed
-  };
+  return { seatMap, allocMap };
 }
 
 
 // ============================================================
-// IMPROVEMENT (MOVE + SWAP)
+// IMPROVEMENT (MOVE + SWAP WITHOUT DUPLICATES)
 // ============================================================
 
-function improveAllocation(hall, allocations, queues) {
+function improveAllocation(hall, seatMap, allocMap, queues) {
 
   const R = hall.total_rows;
   const C = hall.total_cols;
-
-  const seatMap = {};
-  const allocMap = {};
-
-  // build maps
-  for (const a of allocations) {
-    const key = `${a.seat_row},${a.seat_col}`;
-    seatMap[key] = a.dept_code;
-    allocMap[key] = a;
-  }
 
   function hasConflict(row, col, dept) {
     const dirs = [
@@ -218,13 +205,16 @@ function improveAllocation(hall, allocations, queues) {
 
       // Direct placement
       for (let idx = 0; idx < emptySeats.length; idx++) {
+
         const [r,c] = emptySeats[idx];
 
         if (!hasConflict(r,c,dept)) {
 
-          seatMap[`${r},${c}`] = dept;
+          const key = `${r},${c}`;
 
-          allocations.push({
+          seatMap[key] = dept;
+
+          allocMap[key] = {
             student_id: student.student_id,
             student_name: student.student_name || '',
             dept_code: dept,
@@ -233,7 +223,7 @@ function improveAllocation(hall, allocations, queues) {
             seat_row: r,
             seat_col: c,
             seat_label: `R${r}C${c}`
-          });
+          };
 
           emptySeats.splice(idx,1);
           queues[dept].splice(i,1);
@@ -263,19 +253,22 @@ function improveAllocation(hall, allocations, queues) {
 
             if (!hasConflict(r2,c2,otherDept)) {
 
-              const old = allocMap[key];
+              const oldAlloc = allocMap[key];
 
-              // update old allocation instead of duplicate
-              old.seat_row = r2;
-              old.seat_col = c2;
-              old.seat_label = `R${r2}C${c2}`;
+              // move old student
+              const newKey = `${r2},${c2}`;
+              seatMap[newKey] = otherDept;
 
-              seatMap[`${r2},${c2}`] = otherDept;
+              oldAlloc.seat_row = r2;
+              oldAlloc.seat_col = c2;
+              oldAlloc.seat_label = `R${r2}C${c2}`;
 
-              // place new
+              allocMap[newKey] = oldAlloc;
+
+              // place new student in original seat
               seatMap[key] = dept;
 
-              allocations.push({
+              allocMap[key] = {
                 student_id: student.student_id,
                 student_name: student.student_name || '',
                 dept_code: dept,
@@ -284,7 +277,9 @@ function improveAllocation(hall, allocations, queues) {
                 seat_row: r,
                 seat_col: c,
                 seat_label: `R${r}C${c}`
-              });
+              };
+
+              delete allocMap[key]; // remove old reference
 
               emptySeats.splice(idx,1);
               emptySeats.push([r,c]);
