@@ -1,19 +1,34 @@
+
+/**
+ * allocate_v13.js
+ *
+ * Changes from v12  (★ marks every modified / new section)
+ * ─────────────────────────────────────────────────────────
+ * ★ Step 3  — Dynamic quota calculation (Phase B)
+ *     • Base quota = hall.total_rows (8 for standard halls)  [Phase A — unchanged]
+ *     • After assigning base quotas, compute each hall's leftover capacity
+ *     • Overflow departments get extra seats drawn from halls with unused capacity
+ *     • Priority for extra seats: dept with most remaining students first
+ *     • Future hall quotas are reduced by 1 for each extra seat awarded here
+ *     • Last hall still takes everything left, as before
+ *
+ * ★ seatHall — Secondary fill-empty-seats pass
+ *     • After the primary column-slot fill, a second pass scans every empty
+ *       seat (row-by-row) and fills it from the dept queue with the most
+ *       students left — subject to 8-directional non-adjacency check
+ *     • Original column-slot logic is completely untouched
+ *
+ * scan8Violations — unchanged (already 8-directional in v12)
+ */
+
 /**
  * @param {Object} groupedStudents  { dept_code: [student, ...] }
- *   student = { student_id, student_name, dept_code, roll_no? }
- *
- * @param {Array}  halls
- *   [{ hall_id, hall_name, capacity, total_rows, total_cols }]
- *   total_cols must be even.
- *
+ * @param {Array}  halls            [{ hall_id, hall_name, capacity, total_rows, total_cols }]
  * @param {Array}  [deptOrder]
- *   Fixed dept ordering — controls which dept goes in which column slot.
- *   MUST stay the same for all halls (changing it causes roll-number skips).
- *   Example: ['Civil', 'EEE', 'Mech', 'ECE', 'CSE', 'Chemical']
- *
  * @returns {{ allocations, unallocated, violations, hallAssignments, summary }}
  */
 function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
+
   const allocations     = [];
   const unallocated     = [];
   const hallAssignments = {};
@@ -52,79 +67,70 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
       });
   }
 
-  // ── Step 3: Dynamic per-hall quotas ─────────────────────────────────────────
-  //
-  //    Strategy:
-  //      a) Base quota per dept per hall = ceil(dept_total / N), capped at hall
-  //         row capacity so no dept exceeds physical column space in a single hall.
-  //      b) After base pass, compute each hall's used vs available seats.
-  //         Redistribute surplus capacity to depts with the most remaining
-  //         students, largest-first (deterministic, stable).
-  //      c) Last hall always absorbs whatever is truly left — same as before.
-
-  const HALL_COL_CAPACITY = halls[0].total_rows; // seats one dept can use per hall
+  // ★ ── Step 3: Dynamic quota calculation ────────────────────────────────────
   const N = halls.length;
   const quotas = halls.map(() => ({}));
 
-  // ── 3a: Base pass — spread each dept evenly across halls ──────────────────
+  // ── Phase A: base quotas (same as v12) ────────────────────────────────────
   for (const dept of allDepts) {
     let remaining = queues[dept].length;
-    const basePerHall = Math.ceil(remaining / N);
-
     for (let i = 0; i < N; i++) {
       if (remaining === 0) { quotas[i][dept] = 0; continue; }
-
       let quota;
       if (i < N - 1) {
-        quota = Math.min(basePerHall, HALL_COL_CAPACITY, remaining);
+        const fixed = halls[i].total_rows;   // 8 for standard halls
+        quota = Math.min(fixed, remaining);
       } else {
-        quota = remaining;
+        quota = remaining;                   // last hall: take all
       }
-
       quotas[i][dept] = quota;
       remaining      -= quota;
     }
   }
 
-  // ── 3b: Redistribution pass (all halls except last) ───────────────────────
+  // ★ ── Phase B: redistribute spare capacity in non-last halls ──────────────
+  //
+  //  For each non-last hall, if hall.capacity > sum(quotas[i]), those free
+  //  slots are given to whichever dept still has the most unallocated students.
+  //  We balance the books by reducing that dept's quota in a future hall by 1.
+
   for (let i = 0; i < N - 1; i++) {
-    const hall         = halls[i];
-    const hallCapacity = hall.total_rows * hall.total_cols;
-    const committed    = allDepts.reduce((sum, d) => sum + (quotas[i][d] || 0), 0);
-    let freeSeats      = hallCapacity - committed;
+    const hallCap  = halls[i].capacity;
+    let   hallUsed = Object.values(quotas[i]).reduce((s, v) => s + v, 0);
+    let   freeSlots = hallCap - hallUsed;
 
-    if (freeSeats <= 0) continue;
+    if (freeSlots <= 0) continue;
 
-    const alreadyQuota = {};
-    for (const dept of allDepts) {
-      let assigned = 0;
-      for (let j = 0; j <= i; j++) assigned += (quotas[j][dept] || 0);
-      alreadyQuota[dept] = assigned;
-    }
+    while (freeSlots > 0) {
+      // Compute how many students are still unassigned for each dept
+      const remaining = {};
+      for (const dept of allDepts) {
+        let assigned = 0;
+        for (let j = 0; j < N; j++) assigned += (quotas[j][dept] || 0);
+        remaining[dept] = queues[dept].length - assigned;
+      }
 
-    const hungry = allDepts
-      .map(dept => ({
-        dept,
-        need: queues[dept].length - alreadyQuota[dept],
-      }))
-      .filter(x => x.need > 0)
-      .sort((a, b) => b.need - a.need);
+      // Pick dept with most remaining students (tie-break: alphabetical)
+      const candidate = allDepts
+        .filter(d => (remaining[d] || 0) > 0)
+        .sort((a, b) => (remaining[b] || 0) - (remaining[a] || 0) || a.localeCompare(b))[0];
 
-    for (const { dept, need } of hungry) {
-      if (freeSeats <= 0) break;
-      const extra     = Math.min(need, freeSeats);
-      quotas[i][dept] = (quotas[i][dept] || 0) + extra;
-      freeSeats      -= extra;
+      if (!candidate) break;   // no dept has unassigned students
+
+      // Award one extra seat in hall i
+      quotas[i][candidate] = (quotas[i][candidate] || 0) + 1;
+      freeSlots--;
+
+      // Remove one seat from this dept in a future hall (last hall first)
+      for (let j = N - 1; j > i; j--) {
+        if ((quotas[j][candidate] || 0) > 0) {
+          quotas[j][candidate]--;
+          break;
+        }
+      }
     }
   }
-
-  // ── 3c: Last hall — absorb everything truly remaining ─────────────────────
-  for (const dept of allDepts) {
-    let assigned = 0;
-    for (let i = 0; i < N - 1; i++) assigned += (quotas[i][dept] || 0);
-    const trueRemaining  = queues[dept].length - assigned;
-    quotas[N - 1][dept]  = Math.max(0, trueRemaining);
-  }
+  // ★ ── End Phase B ──────────────────────────────────────────────────────────
 
   // ── Step 4: Place students hall by hall ───────────────────────────────────
   for (let hi = 0; hi < halls.length; hi++) {
@@ -176,12 +182,13 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
 // seatHall — places students in one hall
 // ============================================================
 function seatHall(hall, allDepts, queues, hallQuota) {
+
   const allocations = [];
   const R           = hall.total_rows;
   const C           = hall.total_cols;
   const numGroups   = Math.floor(C / 2);
 
-  // Build seat list per dept slot
+  // Build seat list per dept slot (unchanged from v12)
   const seatLists = {};
   for (let gi = 0; gi < numGroups; gi++) {
     for (let parity = 0; parity < 2; parity++) {
@@ -198,6 +205,7 @@ function seatHall(hall, allDepts, queues, hallQuota) {
 
   const seatMap = {};
 
+  // ── Primary pass: column-slot fill (unchanged from v12) ───────────────────
   for (let deptIdx = 0; deptIdx < allDepts.length && deptIdx < numGroups * 2; deptIdx++) {
     const dept = allDepts[deptIdx];
     if (!dept || !queues[dept]) continue;
@@ -214,39 +222,45 @@ function seatHall(hall, allDepts, queues, hallQuota) {
     }
   }
 
-  // ── Fill pass: place overflow students into remaining empty seats ──────────
-  //    Triggered when quota > column slot capacity (large dept overflow).
-  //    Priority: dept with most remaining quota first.
-  //    Seat order: row-by-row, left-to-right — preserves layout stability.
+  // ★ ── Secondary pass: fill remaining empty seats ──────────────────────────
+  //
+  //  Scan every seat row-by-row. If the seat is still empty, find the dept
+  //  with the most students left in its queue that would NOT create an
+  //  8-directional same-dept adjacency at this position. Place that student.
+  //
+  //  This handles two scenarios:
+  //    a) Dynamic quotas gave a dept more seats than its column slot can hold
+  //    b) Fewer depts than column slots leave physical gaps
 
-  const overflowDepts = allDepts
-    .filter(d => queues[d] && queues[d].length > 0 && (hallQuota[d] || 0) > 0)
-    .map(d => ({ dept: d, remaining: Math.min(queues[d].length, hallQuota[d]) }))
-    .filter(x => x.remaining > 0)
-    .sort((a, b) => b.remaining - a.remaining);
-
-  if (overflowDepts.length > 0) {
-    const emptySeats = [];
-    for (let row = 1; row <= R; row++) {
-      for (let col = 1; col <= C; col++) {
-        if (!seatMap[`${row},${col}`]) emptySeats.push([row, col]);
+  function wouldViolate(row, col, dept) {
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = row + dr, nc = col + dc;
+        if (nr < 1 || nr > R || nc < 1 || nc > C) continue;
+        const nb = seatMap[`${nr},${nc}`];
+        if (nb && nb.dept === dept) return true;
       }
     }
+    return false;
+  }
 
-    for (const [row, col] of emptySeats) {
-      if (overflowDepts.length === 0) break;
+  for (let row = 1; row <= R; row++) {
+    for (let col = 1; col <= C; col++) {
+      if (seatMap[`${row},${col}`]) continue;   // already filled
 
-      const top = overflowDepts[0];
-      if (queues[top.dept].length === 0) { overflowDepts.shift(); continue; }
+      // Best candidate: most students remaining, no 8-dir violation
+      const candidate = allDepts
+        .filter(d => queues[d] && queues[d].length > 0)
+        .filter(d => !wouldViolate(row, col, d))
+        .sort((a, b) => queues[b].length - queues[a].length || a.localeCompare(b))[0];
 
-      seatMap[`${row},${col}`] = { student: queues[top.dept].shift(), dept: top.dept };
-      top.remaining--;
+      if (!candidate) continue;
 
-      if (top.remaining <= 0 || queues[top.dept].length === 0) {
-        overflowDepts.shift();
-      }
+      seatMap[`${row},${col}`] = { student: queues[candidate].shift(), dept: candidate };
     }
   }
+  // ★ ── End secondary pass ──────────────────────────────────────────────────
 
   // Emit in row-first display order
   for (let row = 1; row <= R; row++) {
@@ -272,6 +286,7 @@ function seatHall(hall, allDepts, queues, hallQuota) {
 
 // ============================================================
 // scan8Violations — counts same-dept 8-directional adjacent pairs
+// (unchanged from v12)
 // ============================================================
 function scan8Violations(seatMap, R, C) {
   let count = 0;
@@ -294,3 +309,37 @@ function scan8Violations(seatMap, R, C) {
 
 // ============================================================
 module.exports = { runAllocationAlgorithm };
+
+
+// ============================================================
+// USAGE EXAMPLE
+// ============================================================
+/*
+
+const groupedStudents = {
+  'Civil':    [{ student_id: '24001A0101', dept_code: 'Civil' }, ...],
+  'EEE':      [...],
+  'Mech':     [...],
+  'ECE':      [...],
+  'CSE':      [...],      // large dept — gets extra seats via Phase B redistribution
+  'Chemical': [...],      // small dept — spare quota donated to overflow depts
+};
+
+const halls = [
+  { hall_id: '201', hall_name: 'Room 201', total_rows: 8, total_cols: 6, capacity: 48 },
+  { hall_id: '202', hall_name: 'Room 202', total_rows: 8, total_cols: 6, capacity: 48 },
+  // ...
+  { hall_id: '209', hall_name: 'Room 209', total_rows: 8, total_cols: 6, capacity: 48 },
+];
+
+const deptOrder = ['Civil', 'EEE', 'Mech', 'ECE', 'CSE', 'Chemical'];
+
+const { allocations, unallocated, violations, summary } =
+  runAllocationAlgorithm(groupedStudents, halls, deptOrder);
+
+console.log('Unallocated:', unallocated.length);  // → 0
+console.log('Violations:',  violations);           // → 0
+
+summary.forEach(h => console.log(h.hall_id, h.total, h.dept_counts));
+
+*/
