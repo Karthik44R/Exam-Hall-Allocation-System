@@ -1,5 +1,5 @@
 /**
- * Smart Exam Seating Allocation Algorithm (Balanced + Flexible)
+ * STRICT Exam Seating Allocation (NO 8-direction conflicts)
  */
 
 function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
@@ -9,7 +9,6 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
   const summary = [];
   const hallAssignments = {};
 
-  // ── Filter invalid students ───────────────────────────────
   const PLACEHOLDERS = new Set(['self report','n/a','na','-','null','none','absent','']);
 
   function isValid(s) {
@@ -18,12 +17,10 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
     return !PLACEHOLDERS.has(name);
   }
 
-  // ── Departments order ─────────────────────────────────────
   const allDepts = deptOrder
     ? deptOrder.filter(d => groupedStudents[d])
     : Object.keys(groupedStudents);
 
-  // ── Sort students ─────────────────────────────────────────
   function rollKey(s) {
     const id = String(s.roll_no ?? s.student_id ?? '');
     const m = id.match(/^(.*?)(\d+)$/);
@@ -42,14 +39,12 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
       });
   }
 
-  // ── Process each hall ─────────────────────────────────────
   for (const hall of halls) {
 
-    const result = seatHallSmart(hall, allDepts, queues);
+    const result = seatHallStrict(hall, allDepts, queues);
 
     allocations.push(...result.allocations);
 
-    // summary
     const deptCounts = {};
     for (const a of result.allocations) {
       deptCounts[a.dept_code] = (deptCounts[a.dept_code] || 0) + 1;
@@ -63,7 +58,6 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
       violations: result.violations
     });
 
-    // first hall assignment
     for (const dept of Object.keys(deptCounts)) {
       if (hallAssignments[dept] === undefined) {
         hallAssignments[dept] = hall.hall_id;
@@ -71,14 +65,13 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
     }
   }
 
-  // ── Unallocated ───────────────────────────────────────────
   for (const dept of allDepts) {
     for (const s of queues[dept]) {
       unallocated.push({
         student_id: s.student_id,
         student_name: s.student_name,
         dept_code: dept,
-        reason: 'No capacity'
+        reason: 'No safe seat (8-direction constraint)'
       });
     }
   }
@@ -90,10 +83,10 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
 
 
 // ============================================================
-// Smart Hall Allocation
+// STRICT Hall Allocation (NO VIOLATIONS)
 // ============================================================
 
-function seatHallSmart(hall, allDepts, queues) {
+function seatHallStrict(hall, allDepts, queues) {
 
   const allocations = [];
   const seatMap = {};
@@ -101,24 +94,19 @@ function seatHallSmart(hall, allDepts, queues) {
   const R = hall.total_rows;
   const C = hall.total_cols;
 
-  // ── Build seat priority (structured) ──────────────────────
   const seats = [];
-
   const numGroups = Math.floor(C / 2);
 
   for (let gi = 0; gi < numGroups; gi++) {
     for (let parity = 0; parity < 2; parity++) {
-
       for (const col of [gi + 1, gi + 1 + numGroups]) {
         for (let row = 1 + parity; row <= R; row += 2) {
           seats.push([row, col]);
         }
       }
-
     }
   }
 
-  // ── Adjacency check ───────────────────────────────────────
   function hasConflict(row, col, dept) {
     const dirs = [
       [0,1],[1,0],[1,1],[1,-1],
@@ -126,26 +114,35 @@ function seatHallSmart(hall, allDepts, queues) {
     ];
 
     for (const [dr, dc] of dirs) {
-      const key = `${row+dr},${col+dc}`;
-      if (seatMap[key] && seatMap[key] === dept) return true;
+      if (seatMap[`${row+dr},${col+dc}`] === dept) {
+        return true;
+      }
     }
     return false;
   }
 
-  // ── Fill seats ────────────────────────────────────────────
+  // smarter dept selection
+  function getSortedDepts() {
+    const arr = allDepts.filter(d => queues[d].length > 0);
+
+    arr.sort((a, b) => queues[b].length - queues[a].length);
+
+    // light shuffle to avoid clustering
+    for (let i = 0; i < Math.min(3, arr.length); i++) {
+      const j = Math.floor(Math.random() * arr.length);
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+
+    return arr;
+  }
+
+  // fill seats STRICTLY
   for (const [row, col] of seats) {
 
-    // sort depts by remaining students (largest first)
-    const sorted = [...allDepts].sort(
-      (a, b) => queues[b].length - queues[a].length
-    );
-
+    const sorted = getSortedDepts();
     let placed = false;
 
-    // try safe placement first
     for (const dept of sorted) {
-
-      if (queues[dept].length === 0) continue;
 
       if (!hasConflict(row, col, dept)) {
 
@@ -169,30 +166,8 @@ function seatHallSmart(hall, allDepts, queues) {
       }
     }
 
-    // fallback (ignore adjacency if needed)
-    if (!placed) {
-      for (const dept of sorted) {
-        if (queues[dept].length > 0) {
-
-          const student = queues[dept].shift();
-
-          seatMap[`${row},${col}`] = dept;
-
-          allocations.push({
-            student_id: student.student_id,
-            student_name: student.student_name || '',
-            dept_code: dept,
-            subject_code: student.subject_code || dept,
-            hall_id: hall.hall_id,
-            seat_row: row,
-            seat_col: col,
-            seat_label: `R${row}C${col}`
-          });
-
-          break;
-        }
-      }
-    }
+    // 🚫 NO FALLBACK → leave empty if conflict
+    if (!placed) continue;
   }
 
   return {
@@ -203,13 +178,12 @@ function seatHallSmart(hall, allDepts, queues) {
 
 
 // ============================================================
-// Violation checker
+// Violation checker (should return 0 always)
 // ============================================================
 
 function scan8Violations(seatMap, R, C) {
 
   let count = 0;
-
   const dirs = [[0,1],[1,0],[1,1],[1,-1]];
 
   for (let r = 1; r <= R; r++) {
@@ -219,11 +193,7 @@ function scan8Violations(seatMap, R, C) {
       if (!here) continue;
 
       for (const [dr, dc] of dirs) {
-        const nr = r + dr, nc = c + dc;
-
-        if (nr < 1 || nr > R || nc < 1 || nc > C) continue;
-
-        const there = seatMap[`${nr},${nc}`];
+        const there = seatMap[`${r+dr},${c+dc}`];
         if (there && there === here) count++;
       }
     }
