@@ -1,5 +1,5 @@
 /**
- * FINAL Exam Seating Allocation (STRICT + OPTIMIZED + NO DUPLICATES)
+ * FINAL Exam Seating Allocation (STRICT + OPTIMIZED + OVERFLOW SAFE)
  */
 
 function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
@@ -43,8 +43,9 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
 
     const result = seatHallStrict(hall, allDepts, queues);
 
-    // Phase 2 optimization (safe)
     improveAllocation(hall, result.seatMap, result.allocMap, queues);
+
+    rebalanceOverflow(hall, result.seatMap, result.allocMap, queues);
 
     const finalAllocations = Object.values(result.allocMap);
 
@@ -86,7 +87,7 @@ function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
 
 
 // ============================================================
-// STRICT SEATING (NO VIOLATIONS)
+// STRICT SEATING
 // ============================================================
 
 function seatHallStrict(hall, allDepts, queues) {
@@ -142,7 +143,6 @@ function seatHallStrict(hall, allDepts, queues) {
       if (!hasConflict(row, col, dept)) {
 
         const student = queues[dept].shift();
-
         const key = `${row},${col}`;
 
         seatMap[key] = dept;
@@ -168,7 +168,7 @@ function seatHallStrict(hall, allDepts, queues) {
 
 
 // ============================================================
-// IMPROVEMENT (MOVE + SWAP WITHOUT DUPLICATES)
+// IMPROVE (MOVE + SWAP)
 // ============================================================
 
 function improveAllocation(hall, seatMap, allocMap, queues) {
@@ -203,7 +203,7 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
       const student = queues[dept][i];
       let placed = false;
 
-      // Direct placement
+      // Direct
       for (let idx = 0; idx < emptySeats.length; idx++) {
 
         const [r,c] = emptySeats[idx];
@@ -213,7 +213,6 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
           const key = `${r},${c}`;
 
           seatMap[key] = dept;
-
           allocMap[key] = {
             student_id: student.student_id,
             student_name: student.student_name || '',
@@ -235,7 +234,7 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
 
       if (placed) continue;
 
-      // Swap
+      // Swap (fixed)
       for (const key of Object.keys(seatMap)) {
 
         const [r,c] = key.split(',').map(Number);
@@ -254,9 +253,9 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
             if (!hasConflict(r2,c2,otherDept)) {
 
               const oldAlloc = allocMap[key];
-
-              // move old student
               const newKey = `${r2},${c2}`;
+
+              // move old
               seatMap[newKey] = otherDept;
 
               oldAlloc.seat_row = r2;
@@ -264,8 +263,9 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
               oldAlloc.seat_label = `R${r2}C${c2}`;
 
               allocMap[newKey] = oldAlloc;
+              delete allocMap[key];
 
-              // place new student in original seat
+              // place new
               seatMap[key] = dept;
 
               allocMap[key] = {
@@ -278,8 +278,6 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
                 seat_col: c,
                 seat_label: `R${r}C${c}`
               };
-
-              delete allocMap[key]; // remove old reference
 
               emptySeats.splice(idx,1);
               emptySeats.push([r,c]);
@@ -298,6 +296,75 @@ function improveAllocation(hall, seatMap, allocMap, queues) {
       }
 
       if (!placed) i++;
+    }
+  }
+}
+
+
+// ============================================================
+// OVERFLOW HANDLER
+// ============================================================
+
+function rebalanceOverflow(hall, seatMap, allocMap, queues) {
+
+  const R = hall.total_rows;
+  const C = hall.total_cols;
+
+  function hasConflict(row, col, dept) {
+    const dirs = [
+      [0,1],[1,0],[1,1],[1,-1],
+      [0,-1],[-1,0],[-1,-1],[-1,1]
+    ];
+    for (const [dr, dc] of dirs) {
+      if (seatMap[`${row+dr},${col+dc}`] === dept) return true;
+    }
+    return false;
+  }
+
+  const heavyDepts = Object.keys(queues)
+    .filter(d => queues[d].length > 0)
+    .sort((a,b) => queues[b].length - queues[a].length);
+
+  for (const dept of heavyDepts) {
+
+    let tries = 0;
+
+    while (queues[dept].length > 0 && tries < 200) {
+
+      const student = queues[dept][0];
+      let placed = false;
+
+      for (let t = 0; t < 40; t++) {
+
+        const r = Math.floor(Math.random() * R) + 1;
+        const c = Math.floor(Math.random() * C) + 1;
+
+        const key = `${r},${c}`;
+        const existing = seatMap[key];
+
+        if (!existing && !hasConflict(r,c,dept)) {
+
+          seatMap[key] = dept;
+
+          allocMap[key] = {
+            student_id: student.student_id,
+            student_name: student.student_name || '',
+            dept_code: dept,
+            subject_code: student.subject_code || dept,
+            hall_id: hall.hall_id,
+            seat_row: r,
+            seat_col: c,
+            seat_label: `R${r}C${c}`
+          };
+
+          queues[dept].shift();
+          placed = true;
+          break;
+        }
+      }
+
+      if (!placed) break;
+      tries++;
     }
   }
 }
