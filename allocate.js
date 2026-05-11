@@ -1,375 +1,217 @@
 /**
- * FINAL Exam Seating Allocation (STRICT + OPTIMIZED + OVERFLOW SAFE)
+ * @param {Object} groupedStudents  { dept_code: [student, ...] }
+ * student = { student_id, student_name, dept_code, roll_no? }
+ *
+ * @param {Array}  halls
+ * [{ hall_id, hall_name, capacity, total_rows, total_cols }]
+ *
+ * @param {Array}  [deptOrder]
+ * Fixed dept ordering (used to prioritize queue processing).
+ *
+ * @returns {{ allocations, unallocated, violations, hallAssignments, summary }}
  */
-
 function runAllocationAlgorithm(groupedStudents, halls, deptOrder = null) {
-
-  const allocations = [];
-  const unallocated = [];
-  const summary = [];
+  const allocations     = [];
+  const unallocated     = [];
   const hallAssignments = {};
+  const summary         = [];
 
-  const PLACEHOLDERS = new Set(['self report','n/a','na','-','null','none','absent','']);
+  const PLACEHOLDERS = new Set(['self report', 'n/a', 'na', '-', 'null', 'none', 'absent', '']);
 
-  function isValid(s) {
-    if (!s.student_id) return false;
-    const name = String(s.student_name || '').toLowerCase().trim();
+  function isValidStudent(s) {
+    if (!s.student_id || String(s.student_id).trim() === '') return false;
+    const name = String(s.student_name || '').trim().toLowerCase();
     return !PLACEHOLDERS.has(name);
   }
 
+  // Step 1: Establish consistent department ordering
   const allDepts = deptOrder
-    ? deptOrder.filter(d => groupedStudents[d])
-    : Object.keys(groupedStudents);
+    ? [...deptOrder].filter(d => groupedStudents[d])
+    : Object.keys(groupedStudents).sort();
 
-  function rollKey(s) {
+  // Step 2: Sort student queues by roll number
+  function rollSortKey(s) {
     const id = String(s.roll_no ?? s.student_id ?? '');
-    const m = id.match(/^(.*?)(\d+)$/);
-    return m ? { p: m[1], n: +m[2] } : { p: id, n: 0 };
+    const m  = id.match(/^(.*?)(\d+)$/);
+    return m ? { prefix: m[1], num: parseInt(m[2], 10) } : { prefix: id, num: 0 };
   }
 
   const queues = {};
   for (const dept of allDepts) {
     queues[dept] = (groupedStudents[dept] || [])
-      .filter(isValid)
+      .filter(isValidStudent)
       .map(s => ({ ...s }))
       .sort((a, b) => {
-        const ka = rollKey(a), kb = rollKey(b);
-        if (ka.p !== kb.p) return ka.p.localeCompare(kb.p);
-        return ka.n - kb.n;
+        const ka = rollSortKey(a), kb = rollSortKey(b);
+        if (ka.prefix !== kb.prefix) return ka.prefix.localeCompare(kb.prefix);
+        return ka.num - kb.num;
       });
   }
 
-  for (const hall of halls) {
+  // Step 3: Run spatial allocation hall-by-hall
+  for (let hi = 0; hi < halls.length; hi++) {
+    const hall = halls[hi];
 
-    const result = seatHallStrict(hall, allDepts, queues);
+    // Try to register assignments for tracking
+    for (const dept of allDepts) {
+      if (queues[dept].length > 0 && hallAssignments[dept] === undefined) {
+        hallAssignments[dept] = hall.hall_id;
+      }
+    }
 
-    improveAllocation(hall, result.seatMap, result.allocMap, queues);
-
-    rebalanceOverflow(hall, result.seatMap, result.allocMap, queues);
-
-    const finalAllocations = Object.values(result.allocMap);
-
-    allocations.push(...finalAllocations);
+    const result = seatHallWith8Directions(hall, allDepts, queues);
+    allocations.push(...result.allocations);
 
     const deptCounts = {};
-    for (const a of finalAllocations) {
+    for (const a of result.allocations) {
       deptCounts[a.dept_code] = (deptCounts[a.dept_code] || 0) + 1;
     }
 
     summary.push({
-      hall_id: hall.hall_id,
-      hall_name: hall.hall_name,
-      total: finalAllocations.length,
+      hall_id:     hall.hall_id,
+      hall_name:   hall.hall_name,
+      total:       result.allocations.length,
       dept_counts: deptCounts,
-      violations: 0
+      violations:  result.violations,
     });
-
-    for (const dept of Object.keys(deptCounts)) {
-      if (hallAssignments[dept] === undefined) {
-        hallAssignments[dept] = hall.hall_id;
-      }
-    }
   }
 
+  // Step 4: Track unallocated students
   for (const dept of allDepts) {
     for (const s of queues[dept]) {
       unallocated.push({
-        student_id: s.student_id,
-        student_name: s.student_name,
-        dept_code: dept,
-        reason: 'No safe seat (8-direction constraint)'
+        student_id:   s.student_id,
+        student_name: s.student_name || '',
+        dept_code:    dept,
+        subject_code: s.subject_code || dept,
+        reason:       'No remaining hall capacity under active constraint rules',
       });
     }
+    queues[dept] = [];
   }
 
-  return { allocations, unallocated, violations: 0, hallAssignments, summary };
+  const totalViolations = summary.reduce((sum, h) => sum + h.violations, 0);
+  return { allocations, unallocated, violations: totalViolations, hallAssignments, summary };
 }
 
-
 // ============================================================
-// STRICT SEATING
+// seatHallWith8Directions — Solver with strict neighborhood checks
 // ============================================================
-
-function seatHallStrict(hall, allDepts, queues) {
-
-  const seatMap = {};
-  const allocMap = {};
-
+function seatHallWith8Directions(hall, allDepts, queues) {
   const R = hall.total_rows;
   const C = hall.total_cols;
+  const allocations = [];
 
-  const seats = [];
-  const numGroups = Math.floor(C / 2);
+  // Initialize empty grid representation: key format "row,col"
+  const grid = {};
 
-  for (let gi = 0; gi < numGroups; gi++) {
-    for (let parity = 0; parity < 2; parity++) {
-      for (const col of [gi + 1, gi + 1 + numGroups]) {
-        for (let row = 1 + parity; row <= R; row += 2) {
-          seats.push([row, col]);
+  // Define relative offsets for all 8 adjacent neighbors
+  const NEIGHBORS = [
+    [-1, -1], [-1, 0], [-1, 1],
+    [0, -1],           [0, 1],
+    [1, -1],  [1, 0],  [1, 1]
+  ];
+
+  // Helper check: Is it safe to place a department at grid[r, c]?
+  function isSafe(r, c, dept) {
+    for (const [dr, dc] of NEIGHBORS) {
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr >= 1 && nr <= R && nc >= 1 && nc <= C) {
+        const neighbor = grid[`${nr},${nc}`];
+        if (neighbor && neighbor.dept === dept) {
+          return false; // Found same department within 8-directions
         }
       }
     }
+    return true;
   }
 
-  function hasConflict(row, col, dept) {
-    const dirs = [
-      [0,1],[1,0],[1,1],[1,-1],
-      [0,-1],[-1,0],[-1,-1],[-1,1]
-    ];
-    for (const [dr, dc] of dirs) {
-      if (seatMap[`${row+dr},${col+dc}`] === dept) return true;
-    }
-    return false;
-  }
+  // Recursive Backtracking Solver
+  function solve(index) {
+    const totalSeats = R * C;
+    if (index >= totalSeats) return true; // Successfully solved the entire room
 
-  function getSortedDepts() {
-    const arr = allDepts.filter(d => queues[d].length > 0);
-    arr.sort((a, b) => queues[b].length - queues[a].length);
+    // Map 1D index to Row and Column (filling Row-by-Row)
+    const r = Math.floor(index / C) + 1;
+    const c = (index % C) + 1;
 
-    for (let i = 0; i < Math.min(3, arr.length); i++) {
-      const j = Math.floor(Math.random() * arr.length);
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
+    // To handle imbalanced queues, always prioritize trying depts with larger remaining queues
+    const sortedDepts = [...allDepts]
+      .filter(dept => queues[dept].length > 0)
+      .sort((a, b) => queues[b].length - queues[a].length);
 
-    return arr;
-  }
-
-  for (const [row, col] of seats) {
-
-    const sorted = getSortedDepts();
-
-    for (const dept of sorted) {
-
-      if (!hasConflict(row, col, dept)) {
-
+    for (const dept of sortedDepts) {
+      if (isSafe(r, c, dept)) {
+        // Place student temporarily
         const student = queues[dept].shift();
-        const key = `${row},${col}`;
+        grid[`${r},${c}`] = { student, dept };
 
-        seatMap[key] = dept;
+        // Recurse to next seat
+        if (solve(index + 1)) return true;
 
-        allocMap[key] = {
-          student_id: student.student_id,
-          student_name: student.student_name || '',
-          dept_code: dept,
-          subject_code: student.subject_code || dept,
-          hall_id: hall.hall_id,
-          seat_row: row,
-          seat_col: col,
-          seat_label: `R${row}C${col}`
-        };
-
-        break;
+        // Backtrack
+        queues[dept].unshift(student);
+        delete grid[`${r},${c}`];
       }
     }
-  }
 
-  return { seatMap, allocMap };
-}
+    // GHOST SEAT (EMPTY SEAT) FALLBACK:
+    // If we have a massive imbalanced department and literally NO available student can go here 
+    // without violating the 8-directional constraint, we must leave this seat empty.
+    grid[`${r},${c}`] = null; 
+    if (solve(index + 1)) return true;
 
-
-// ============================================================
-// IMPROVE (MOVE + SWAP)
-// ============================================================
-
-function improveAllocation(hall, seatMap, allocMap, queues) {
-
-  const R = hall.total_rows;
-  const C = hall.total_cols;
-
-  function hasConflict(row, col, dept) {
-    const dirs = [
-      [0,1],[1,0],[1,1],[1,-1],
-      [0,-1],[-1,0],[-1,-1],[-1,1]
-    ];
-    for (const [dr, dc] of dirs) {
-      if (seatMap[`${row+dr},${col+dc}`] === dept) return true;
-    }
+    // Complete Backtrack if even leaving it empty fails
+    delete grid[`${r},${c}`];
     return false;
   }
 
-  const emptySeats = [];
+  // Run the recursive solver starting from seat 0
+  solve(0);
+
+  // Convert the grid mapping to final allocations payload
   for (let r = 1; r <= R; r++) {
     for (let c = 1; c <= C; c++) {
-      if (!seatMap[`${r},${c}`]) emptySeats.push([r,c]);
+      const entry = grid[`${r},${c}`];
+      if (entry && entry.student) {
+        allocations.push({
+          student_id:   entry.student.student_id,
+          student_name: entry.student.student_name || '',
+          dept_code:    entry.dept,
+          subject_code: entry.student.subject_code || entry.dept,
+          hall_id:      hall.hall_id,
+          seat_row:     r,
+          seat_col:     c,
+          seat_label:   `R${r}C${c}`,
+        });
+      }
     }
   }
 
-  for (const dept of Object.keys(queues)) {
-
-    let i = 0;
-
-    while (i < queues[dept].length) {
-
-      const student = queues[dept][i];
-      let placed = false;
-
-      // Direct
-      for (let idx = 0; idx < emptySeats.length; idx++) {
-
-        const [r,c] = emptySeats[idx];
-
-        if (!hasConflict(r,c,dept)) {
-
-          const key = `${r},${c}`;
-
-          seatMap[key] = dept;
-          allocMap[key] = {
-            student_id: student.student_id,
-            student_name: student.student_name || '',
-            dept_code: dept,
-            subject_code: student.subject_code || dept,
-            hall_id: hall.hall_id,
-            seat_row: r,
-            seat_col: c,
-            seat_label: `R${r}C${c}`
-          };
-
-          emptySeats.splice(idx,1);
-          queues[dept].splice(i,1);
-
-          placed = true;
-          break;
-        }
-      }
-
-      if (placed) continue;
-
-      // Swap (fixed)
-      for (const key of Object.keys(seatMap)) {
-
-        const [r,c] = key.split(',').map(Number);
-        const otherDept = seatMap[key];
-
-        if (otherDept === dept) continue;
-
-        delete seatMap[key];
-
-        if (!hasConflict(r,c,dept)) {
-
-          for (let idx = 0; idx < emptySeats.length; idx++) {
-
-            const [r2,c2] = emptySeats[idx];
-
-            if (!hasConflict(r2,c2,otherDept)) {
-
-              const oldAlloc = allocMap[key];
-              const newKey = `${r2},${c2}`;
-
-              // move old
-              seatMap[newKey] = otherDept;
-
-              oldAlloc.seat_row = r2;
-              oldAlloc.seat_col = c2;
-              oldAlloc.seat_label = `R${r2}C${c2}`;
-
-              allocMap[newKey] = oldAlloc;
-              delete allocMap[key];
-
-              // place new
-              seatMap[key] = dept;
-
-              allocMap[key] = {
-                student_id: student.student_id,
-                student_name: student.student_name || '',
-                dept_code: dept,
-                subject_code: student.subject_code || dept,
-                hall_id: hall.hall_id,
-                seat_row: r,
-                seat_col: c,
-                seat_label: `R${r}C${c}`
-              };
-
-              emptySeats.splice(idx,1);
-              emptySeats.push([r,c]);
-
-              queues[dept].splice(i,1);
-
-              placed = true;
-              break;
-            }
-          }
-
-          if (placed) break;
-        }
-
-        seatMap[key] = otherDept;
-      }
-
-      if (!placed) i++;
-    }
-  }
+  return { allocations, violations: scan8Violations(grid, R, C) };
 }
 
-
 // ============================================================
-// OVERFLOW HANDLER
+// scan8Violations — Counts same-dept 8-directional adjacent pairs
 // ============================================================
-
-function rebalanceOverflow(hall, seatMap, allocMap, queues) {
-
-  const R = hall.total_rows;
-  const C = hall.total_cols;
-
-  function hasConflict(row, col, dept) {
-    const dirs = [
-      [0,1],[1,0],[1,1],[1,-1],
-      [0,-1],[-1,0],[-1,-1],[-1,1]
-    ];
-    for (const [dr, dc] of dirs) {
-      if (seatMap[`${row+dr},${col+dc}`] === dept) return true;
-    }
-    return false;
-  }
-
-  const heavyDepts = Object.keys(queues)
-    .filter(d => queues[d].length > 0)
-    .sort((a,b) => queues[b].length - queues[a].length);
-
-  for (const dept of heavyDepts) {
-
-    let tries = 0;
-
-    while (queues[dept].length > 0 && tries < 200) {
-
-      const student = queues[dept][0];
-      let placed = false;
-
-      for (let t = 0; t < 40; t++) {
-
-        const r = Math.floor(Math.random() * R) + 1;
-        const c = Math.floor(Math.random() * C) + 1;
-
-        const key = `${r},${c}`;
-        const existing = seatMap[key];
-
-        if (!existing && !hasConflict(r,c,dept)) {
-
-          seatMap[key] = dept;
-
-          allocMap[key] = {
-            student_id: student.student_id,
-            student_name: student.student_name || '',
-            dept_code: dept,
-            subject_code: student.subject_code || dept,
-            hall_id: hall.hall_id,
-            seat_row: r,
-            seat_col: c,
-            seat_label: `R${r}C${c}`
-          };
-
-          queues[dept].shift();
-          placed = true;
-          break;
-        }
+function scan8Violations(seatMap, R, C) {
+  let count = 0;
+  // Lookahead directions to avoid double counting (Right, Down, Diagonals Down)
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for (let row = 1; row <= R; row++) {
+    for (let col = 1; col <= C; col++) {
+      const here = seatMap[`${row},${col}`];
+      if (!here || !here.dept) continue;
+      for (const [dr, dc] of dirs) {
+        const nr = row + dr, nc = col + dc;
+        if (nr < 1 || nr > R || nc < 1 || nc > C) continue;
+        const there = seatMap[`${nr},${nc}`];
+        if (there && there.dept === here.dept) count++;
       }
-
-      if (!placed) break;
-      tries++;
     }
   }
+  return count;
 }
-
-
-// ============================================================
 
 module.exports = { runAllocationAlgorithm };
